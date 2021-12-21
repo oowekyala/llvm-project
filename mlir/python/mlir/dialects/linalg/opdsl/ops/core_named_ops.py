@@ -2,6 +2,7 @@ from ..lang import *
 
 T1 = TV.T1
 T2 = TV.T2
+T3 = TV.T3
 
 Batch = S.Batch
 
@@ -9,6 +10,7 @@ Batch = S.Batch
 def conv_2d_relu(
     I=TensorDef(T1, S.N, S.C, S.OH * S.SH + S.KH * S.DH, S.OW * S.SW + S.KW * S.DW),
     K=TensorDef(T2, S.F, S.C, S.KH, S.KW),
+    B=TensorDef(T3, S.F),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
     strides=AttributeDef(S.SH, S.SW),
     dilations=AttributeDef(S.DH, S.DW)):
@@ -23,7 +25,31 @@ def conv_2d_relu(
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
-  O[D.n, D.f, D.oh, D.ow] += PrimFn.max(cast(U, const(0.0)) , cast(
+  O[D.n, D.f, D.oh, D.ow] += PrimFn.max(cast(U, const(0.0)), (cast(U, B[D.f]) + cast(
+      U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW
+           ]) * cast(U, K[D.f, D.c, D.kh, D.kw])))
+
+@linalg_structured_op
+def conv_2d_lrelu(
+    I=TensorDef(T1, S.N, S.C, S.OH * S.SH + S.KH * S.DH, S.OW * S.SW + S.KW * S.DW),
+    K=TensorDef(T2, S.F, S.C, S.KH, S.KW),
+    B=TensorDef(T3, S.F),
+    alpha=ScalarDef(F32),
+    O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
+    strides=AttributeDef(S.SH, S.SW),
+    dilations=AttributeDef(S.DH, S.DW)):
+  """Performs fused 2-D convolution and leaky-relu.
+
+  Layout:
+    * Input: NCHW.
+    * Kernel: FCHW.
+
+  Numeric casting is performed on the operands to the inner multiply, promoting
+  them to the same data type as the accumulator/output.
+  """
+  implements(ConvolutionOpInterface)
+  domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
+  O[D.n, D.f, D.oh, D.ow] += alpha * (cast(U, B[D.f]) + cast(
       U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW
            ]) * cast(U, K[D.f, D.c, D.kh, D.kw]))
 
