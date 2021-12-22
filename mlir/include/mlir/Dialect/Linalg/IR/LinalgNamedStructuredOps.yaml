@@ -241,6 +241,153 @@ structured_op: !LinalgStructuredOpConfig
                         is_unsigned_cast: false
 --- !LinalgOpConfig
 metadata: !LinalgOpMetadata
+  name: conv_2d_lrelu_maxpool
+  cpp_class_name: Conv2DLreluMaxpoolOp
+  doc: |-
+    Performs fused 2-D convolution, leaky-relu and max-pool.
+
+    Layout:
+      * Input: NCHW.
+      * Kernel: FCHW.
+
+    Numeric casting is performed on the operands to the inner multiply, promoting
+    them to the same data type as the accumulator/output.
+  implements:
+  - LinalgConvolutionOpInterface
+structured_op: !LinalgStructuredOpConfig
+  args:
+  - !LinalgOperandDefConfig
+    name: I
+    usage: InputOperand
+    type_var: T1
+    shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12,
+      s13, s14, s15, s16, s17, s18] -> (s0, s1, s2 * s3 + s4 * s5, s6 * s7 + s8 *
+      s9)>
+  - !LinalgOperandDefConfig
+    name: K
+    usage: InputOperand
+    type_var: T2
+    shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12,
+      s13, s14, s15, s16, s17, s18] -> (s10, s1, s4, s8)>
+  - !LinalgOperandDefConfig
+    name: B
+    usage: InputOperand
+    type_var: T3
+    shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12,
+      s13, s14, s15, s16, s17, s18] -> (s10)>
+  - !LinalgOperandDefConfig
+    name: alpha
+    usage: InputOperand
+    type_var: F32
+  - !LinalgOperandDefConfig
+    name: O
+    usage: OutputOperand
+    type_var: U
+    shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12,
+      s13, s14, s15, s16, s17, s18] -> (s0, s10, s2, s6)>
+  - !LinalgOperandDefConfig
+    name: strides
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s3, s7)>
+  - !LinalgOperandDefConfig
+    name: dilations
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s5, s9)>
+  - !LinalgOperandDefConfig
+    name: mp_kernel_size
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s11, s12)>
+  - !LinalgOperandDefConfig
+    name: mp_stride
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s13, s14)>
+  - !LinalgOperandDefConfig
+    name: mp_padding
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s15, s16)>
+  - !LinalgOperandDefConfig
+    name: mp_dilation
+    usage: IndexAttribute
+    type_var: I64
+    attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+      s12, s13, s14, s15, s16, s17, s18] -> (s17, s18)>
+  indexing_maps: !LinalgIndexingMapsConfig
+    static_indexing_maps:
+    - affine_map<(d0, d1, d2, d3, d4, d5, d6)[s0, s1, s2, s3, s4, s5, s6, s7, s8,
+      s9, s10, s11, s12, s13, s14, s15, s16, s17, s18] -> (d0, d4, d2 * s3 + d5 *
+      s5, d3 * s7 + d6 * s9)>
+    - affine_map<(d0, d1, d2, d3, d4, d5, d6)[s0, s1, s2, s3, s4, s5, s6, s7, s8,
+      s9, s10, s11, s12, s13, s14, s15, s16, s17, s18] -> (d1, d4, d5, d6)>
+    - affine_map<(d0, d1, d2, d3, d4, d5, d6)[s0, s1, s2, s3, s4, s5, s6, s7, s8,
+      s9, s10, s11, s12, s13, s14, s15, s16, s17, s18] -> (d1)>
+    - affine_map<(d0, d1, d2, d3, d4, d5, d6)[s0, s1, s2, s3, s4, s5, s6, s7, s8,
+      s9, s10, s11, s12, s13, s14, s15, s16, s17, s18] -> ()>
+    - affine_map<(d0, d1, d2, d3, d4, d5, d6)[s0, s1, s2, s3, s4, s5, s6, s7, s8,
+      s9, s10, s11, s12, s13, s14, s15, s16, s17, s18] -> (d0, d1, d2, d3)>
+  iterator_types:
+  - parallel
+  - parallel
+  - parallel
+  - parallel
+  - reduction
+  - reduction
+  - reduction
+  assignments:
+  - !ScalarAssign
+    arg: O
+    value: !ScalarExpression
+      scalar_apply:
+        fn_name: add
+        operands:
+        - !ScalarExpression
+          scalar_arg: O
+        - !ScalarExpression
+          scalar_apply:
+            fn_name: mul
+            operands:
+            - !ScalarExpression
+              scalar_arg: alpha
+            - !ScalarExpression
+              scalar_apply:
+                fn_name: add
+                operands:
+                - !ScalarExpression
+                  symbolic_cast:
+                    type_var: U
+                    operands:
+                    - !ScalarExpression
+                      scalar_arg: B
+                    is_unsigned_cast: false
+                - !ScalarExpression
+                  scalar_apply:
+                    fn_name: mul
+                    operands:
+                    - !ScalarExpression
+                      symbolic_cast:
+                        type_var: U
+                        operands:
+                        - !ScalarExpression
+                          scalar_arg: I
+                        is_unsigned_cast: false
+                    - !ScalarExpression
+                      symbolic_cast:
+                        type_var: U
+                        operands:
+                        - !ScalarExpression
+                          scalar_arg: K
+                        is_unsigned_cast: false
+--- !LinalgOpConfig
+metadata: !LinalgOpMetadata
   name: matmul
   cpp_class_name: MatmulOp
   doc: |-
