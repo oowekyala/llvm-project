@@ -4,15 +4,10 @@
 metadata: !LinalgOpMetadata
   name: conv_2d_relu
   cpp_class_name: Conv2DReluOp
-  doc: |-
-    Performs fused 2-D convolution and relu.
-
-    Layout:
-      * Input: NCHW.
-      * Kernel: FCHW.
-
-    Numeric casting is performed on the operands to the inner multiply, promoting
-    them to the same data type as the accumulator/output.
+  doc: "Performs fused 2-D convolution and relu.\n\nLayout:\n  * Input: NCHW.\n  *\
+    \ Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops the\
+    \ innier loop functionality \nis incorrect. Implementation of correct conv2d_relu\
+    \ functionality. Current \ninner loop functioality is dummy implementation"
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -41,13 +36,13 @@ structured_op: !LinalgStructuredOpConfig
     shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s0,
       s10, s2, s6)>
   - !LinalgOperandDefConfig
-    name: strides
+    name: stride
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s3,
       s7)>
   - !LinalgOperandDefConfig
-    name: dilations
+    name: dilation
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s5,
@@ -123,15 +118,10 @@ structured_op: !LinalgStructuredOpConfig
 metadata: !LinalgOpMetadata
   name: conv_2d_lrelu
   cpp_class_name: Conv2DLreluOp
-  doc: |-
-    Performs fused 2-D convolution and leaky-relu.
-
-    Layout:
-      * Input: NCHW.
-      * Kernel: FCHW.
-
-    Numeric casting is performed on the operands to the inner multiply, promoting
-    them to the same data type as the accumulator/output.
+  doc: "Performs fused 2-D convolution and leaky-relu.\n\nLayout:\n  * Input: NCHW.\n\
+    \  * Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops\
+    \ the innier loop functionality \nis incorrect. Implementation of correct conv2d_lrelu\
+    \ functionality. Current \ninner loop functioality is dummy implementation"
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -164,13 +154,13 @@ structured_op: !LinalgStructuredOpConfig
     shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s0,
       s10, s2, s6)>
   - !LinalgOperandDefConfig
-    name: strides
+    name: stride
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s3,
       s7)>
   - !LinalgOperandDefConfig
-    name: dilations
+    name: dilation
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10] -> (s5,
@@ -243,15 +233,10 @@ structured_op: !LinalgStructuredOpConfig
 metadata: !LinalgOpMetadata
   name: conv_2d_lrelu_maxpool
   cpp_class_name: Conv2DLreluMaxpoolOp
-  doc: |-
-    Performs fused 2-D convolution, leaky-relu and max-pool.
-
-    Layout:
-      * Input: NCHW.
-      * Kernel: FCHW.
-
-    Numeric casting is performed on the operands to the inner multiply, promoting
-    them to the same data type as the accumulator/output.
+  doc: "Performs fused 2-D convolution, leaky-relu and max-pool.\n\nLayout:\n  * Input:\
+    \ NCHW.\n  * Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops\
+    \ the innier loop functionality \nis incorrect. Implementation of correct conv2d_lrelu_maxpool\
+    \ functionality. Current \ninner loop functioality is dummy implementation"
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -286,13 +271,13 @@ structured_op: !LinalgStructuredOpConfig
     shape_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12,
       s13, s14, s15, s16, s17, s18] -> (s0, s10, s2, s6)>
   - !LinalgOperandDefConfig
-    name: strides
+    name: stride
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
       s12, s13, s14, s15, s16, s17, s18] -> (s3, s7)>
   - !LinalgOperandDefConfig
-    name: dilations
+    name: dilation
     usage: IndexAttribute
     type_var: I64
     attribute_map: affine_map<()[s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,

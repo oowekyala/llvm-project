@@ -12,16 +12,17 @@ def conv_2d_relu(
     K=TensorDef(T2, S.F, S.C, S.KH, S.KW),
     B=TensorDef(T3, S.F),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    strides=AttributeDef(S.SH, S.SW),
-    dilations=AttributeDef(S.DH, S.DW)):
+    stride=AttributeDef(S.SH, S.SW),
+    dilation=AttributeDef(S.DH, S.DW)):
   """Performs fused 2-D convolution and relu.
 
   Layout:
     * Input: NCHW.
     * Kernel: FCHW.
 
-  Numeric casting is performed on the operands to the inner multiply, promoting
-  them to the same data type as the accumulator/output.
+  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
+  is incorrect. Implementation of correct conv2d_relu functionality. Current 
+  inner loop functioality is dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
@@ -36,16 +37,17 @@ def conv_2d_lrelu(
     B=TensorDef(T3, S.F),
     alpha=ScalarDef(F32),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    strides=AttributeDef(S.SH, S.SW),
-    dilations=AttributeDef(S.DH, S.DW)):
+    stride=AttributeDef(S.SH, S.SW),
+    dilation=AttributeDef(S.DH, S.DW)):
   """Performs fused 2-D convolution and leaky-relu.
 
   Layout:
     * Input: NCHW.
     * Kernel: FCHW.
 
-  Numeric casting is performed on the operands to the inner multiply, promoting
-  them to the same data type as the accumulator/output.
+  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
+  is incorrect. Implementation of correct conv2d_lrelu functionality. Current 
+  inner loop functioality is dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
@@ -60,8 +62,8 @@ def conv_2d_lrelu_maxpool(
     B=TensorDef(T3, S.F),
     alpha=ScalarDef(F32),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    strides=AttributeDef(S.SH, S.SW),
-    dilations=AttributeDef(S.DH, S.DW),
+    stride=AttributeDef(S.SH, S.SW),
+    dilation=AttributeDef(S.DH, S.DW),
     mp_kernel_size=AttributeDef(S.MKH, S.MKW),
     mp_stride=AttributeDef(S.MSH, S.MSW),
     mp_padding=AttributeDef(S.MPH, S.MPW),
@@ -72,8 +74,9 @@ def conv_2d_lrelu_maxpool(
     * Input: NCHW.
     * Kernel: FCHW.
 
-  Numeric casting is performed on the operands to the inner multiply, promoting
-  them to the same data type as the accumulator/output.
+  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
+  is incorrect. Implementation of correct conv2d_lrelu_maxpool functionality. Current 
+  inner loop functioality is dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
