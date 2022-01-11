@@ -66,7 +66,7 @@ def conv_2d_lrelu_maxpool(
     dilation=AttributeDef(S.DH, S.DW),
     mp_kernel_size=AttributeDef(S.MKH, S.MKW),
     mp_stride=AttributeDef(S.MSH, S.MSW),
-    mp_padding=AttributeDef(S.MPH, S.MPW),
+    mp_padding=AttributeDef(S.MPHL, S.MPHH, S.MPWL, S.MPWH),
     mp_dilation=AttributeDef(S.MDH, S.MDW)):
   """Performs fused 2-D convolution, leaky-relu and max-pool.
 
