@@ -900,7 +900,7 @@ lldb::LanguageType SymbolFileNativePDB::ParseLanguage(CompileUnit &comp_unit) {
   return TranslateLanguage(item->m_compile_opts->getLanguage());
 }
 
-void SymbolFileNativePDB::AddSymbols(Symtab &symtab) { return; }
+void SymbolFileNativePDB::AddSymbols(Symtab &symtab) {}
 
 size_t SymbolFileNativePDB::ParseFunctions(CompileUnit &comp_unit) {
   std::lock_guard<std::recursive_mutex> guard(GetModuleMutex());
@@ -1182,8 +1182,9 @@ void SymbolFileNativePDB::FindFunctions(
     FunctionNameType name_type_mask, bool include_inlines,
     SymbolContextList &sc_list) {
   std::lock_guard<std::recursive_mutex> guard(GetModuleMutex());
-  // For now we only support lookup by method name.
-  if (!(name_type_mask & eFunctionNameTypeMethod))
+  // For now we only support lookup by method name or full name.
+  if (!(name_type_mask & eFunctionNameTypeFull ||
+        name_type_mask & eFunctionNameTypeMethod))
     return;
 
   using SymbolAndOffset = std::pair<uint32_t, llvm::codeview::CVSymbol>;

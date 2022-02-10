@@ -450,6 +450,14 @@ private:
   /// Determine the most "relevant" loop for the given SCEV.
   const Loop *getRelevantLoop(const SCEV *);
 
+  Value *expandSMaxExpr(const SCEVNAryExpr *S);
+
+  Value *expandUMaxExpr(const SCEVNAryExpr *S);
+
+  Value *expandSMinExpr(const SCEVNAryExpr *S);
+
+  Value *expandUMinExpr(const SCEVNAryExpr *S);
+
   Value *visitConstant(const SCEVConstant *S) { return S->getValue(); }
 
   Value *visitPtrToIntExpr(const SCEVPtrToIntExpr *S);
@@ -475,6 +483,8 @@ private:
   Value *visitSMinExpr(const SCEVSMinExpr *S);
 
   Value *visitUMinExpr(const SCEVUMinExpr *S);
+
+  Value *visitSequentialUMinExpr(const SCEVSequentialUMinExpr *S);
 
   Value *visitUnknown(const SCEVUnknown *S) { return S->getValue(); }
 
@@ -504,15 +514,13 @@ private:
 class SCEVExpanderCleaner {
   SCEVExpander &Expander;
 
-  DominatorTree &DT;
-
   /// Indicates whether the result of the expansion is used. If false, the
   /// instructions added during expansion are removed.
   bool ResultUsed;
 
 public:
-  SCEVExpanderCleaner(SCEVExpander &Expander, DominatorTree &DT)
-      : Expander(Expander), DT(DT), ResultUsed(false) {}
+  SCEVExpanderCleaner(SCEVExpander &Expander)
+      : Expander(Expander), ResultUsed(false) {}
 
   ~SCEVExpanderCleaner() { cleanup(); }
 

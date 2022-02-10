@@ -189,11 +189,13 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
                     ERROR_QUIET
                     )
     if(${RANLIB_RESULT} EQUAL 0)
-      set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> Dqc <TARGET> <LINK_FLAGS> <OBJECTS>")
+      set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> Dqc <TARGET> <LINK_FLAGS> <OBJECTS>"
+          CACHE STRING "archive create command")
       set(CMAKE_C_ARCHIVE_APPEND "<CMAKE_AR> Dq  <TARGET> <LINK_FLAGS> <OBJECTS>")
       set(CMAKE_C_ARCHIVE_FINISH "<CMAKE_RANLIB> -D <TARGET>")
 
-      set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> Dqc <TARGET> <LINK_FLAGS> <OBJECTS>")
+      set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> Dqc <TARGET> <LINK_FLAGS> <OBJECTS>"
+          CACHE STRING "archive create command")
       set(CMAKE_CXX_ARCHIVE_APPEND "<CMAKE_AR> Dq  <TARGET> <LINK_FLAGS> <OBJECTS>")
       set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -D <TARGET>")
     endif()
@@ -488,8 +490,13 @@ if( MSVC )
   endif()
 
   # Get all linker flags in upper case form so we can search them.
-  set(all_linker_flags_uppercase
-    "${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_MODULE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS}")
+  string(CONCAT all_linker_flags_uppercase
+     ${CMAKE_EXE_LINKER_FLAGS_${uppercase_CMAKE_BUILD_TYPE}}
+     ${CMAKE_EXE_LINKER_FLAGS}
+     ${CMAKE_MODULE_LINKER_FLAGS_${uppercase_CMAKE_BUILD_TYPE}}
+     ${CMAKE_MODULE_LINKER_FLAGS}
+     ${CMAKE_SHARED_LINKER_FLAGS_${uppercase_CMAKE_BUILD_TYPE}}
+     ${CMAKE_SHARED_LINKER_FLAGS})
   string(TOUPPER "${all_linker_flags_uppercase}" all_linker_flags_uppercase)
 
   if (CLANG_CL AND LINKER_IS_LLD)
@@ -870,9 +877,11 @@ if(LLVM_USE_SANITIZER)
     append("-fsanitize=fuzzer-no-link" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
   endif()
   if (LLVM_USE_SANITIZER MATCHES ".*Undefined.*")
-    set(BLACKLIST_FILE "${CMAKE_SOURCE_DIR}/utils/sanitizers/ubsan_blacklist.txt")
-    if (EXISTS "${BLACKLIST_FILE}")
-      append("-fsanitize-blacklist=${BLACKLIST_FILE}"
+    set(IGNORELIST_FILE "${CMAKE_SOURCE_DIR}/utils/sanitizers/ubsan_ignorelist.txt")
+    if (EXISTS "${IGNORELIST_FILE}")
+      # Use this option name version since -fsanitize-ignorelist is only
+      # accepted with clang 13.0 or newer.
+      append("-fsanitize-blacklist=${IGNORELIST_FILE}"
              CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
     endif()
   endif()

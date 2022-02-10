@@ -733,35 +733,30 @@ DataInCodeSection::DataInCodeSection()
 
 template <class LP>
 static std::vector<MachO::data_in_code_entry> collectDataInCodeEntries() {
-  using SegmentCommand = typename LP::segment_command;
-  using SectionHeader = typename LP::section;
-
   std::vector<MachO::data_in_code_entry> dataInCodeEntries;
   for (const InputFile *inputFile : inputFiles) {
     if (!isa<ObjFile>(inputFile))
       continue;
     const ObjFile *objFile = cast<ObjFile>(inputFile);
-    const auto *c = reinterpret_cast<const SegmentCommand *>(
-        findCommand(objFile->mb.getBufferStart(), LP::segmentLCType));
-    if (!c)
-      continue;
-    ArrayRef<SectionHeader> sectionHeaders{
-        reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
-
-    ArrayRef<MachO::data_in_code_entry> entries = objFile->dataInCodeEntries;
+    ArrayRef<MachO::data_in_code_entry> entries = objFile->getDataInCode();
     if (entries.empty())
       continue;
+
+    assert(is_sorted(dataInCodeEntries, [](const data_in_code_entry &lhs,
+                                           const data_in_code_entry &rhs) {
+      return lhs.offset < rhs.offset;
+    }));
     // For each code subsection find 'data in code' entries residing in it.
     // Compute the new offset values as
     // <offset within subsection> + <subsection address> - <__TEXT address>.
-    for (size_t i = 0, n = sectionHeaders.size(); i < n; ++i) {
-      for (const Subsection &subsec : objFile->sections[i].subsections) {
+    for (const Section &section : objFile->sections) {
+      for (const Subsection &subsec : section.subsections) {
         const InputSection *isec = subsec.isec;
         if (!isCodeSection(isec))
           continue;
         if (cast<ConcatInputSection>(isec)->shouldOmitFromOutput())
           continue;
-        const uint64_t beginAddr = sectionHeaders[i].addr + subsec.offset;
+        const uint64_t beginAddr = section.address + subsec.offset;
         auto it = llvm::lower_bound(
             entries, beginAddr,
             [](const MachO::data_in_code_entry &entry, uint64_t addr) {
@@ -1479,7 +1474,7 @@ void WordLiteralSection::writeTo(uint8_t *buf) const {
 void macho::createSyntheticSymbols() {
   auto addHeaderSymbol = [](const char *name) {
     symtab->addSynthetic(name, in.header->isec, /*value=*/0,
-                         /*privateExtern=*/true, /*includeInSymtab=*/false,
+                         /*isPrivateExtern=*/true, /*includeInSymtab=*/false,
                          /*referencedDynamically=*/false);
   };
 
@@ -1492,11 +1487,11 @@ void macho::createSyntheticSymbols() {
     // Otherwise, it's an absolute symbol.
     if (config->isPic)
       symtab->addSynthetic("__mh_execute_header", in.header->isec, /*value=*/0,
-                           /*privateExtern=*/false, /*includeInSymtab=*/true,
+                           /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
                            /*referencedDynamically=*/true);
     else
       symtab->addSynthetic("__mh_execute_header", /*isec=*/nullptr, /*value=*/0,
-                           /*privateExtern=*/false, /*includeInSymtab=*/true,
+                           /*isPrivateExtern=*/false, /*includeInSymtab=*/true,
                            /*referencedDynamically=*/true);
     break;
 

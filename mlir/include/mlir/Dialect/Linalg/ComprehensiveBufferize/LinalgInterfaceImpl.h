@@ -1,3 +1,11 @@
+//===- LinalgInterfaceImpl.h - Linalg Impl. of BufferizableOpInterface ----===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef MLIR_DIALECT_LINALG_COMPREHENSIVEBUFFERIZE_LINALG_INTERFACE_IMPL_H
 #define MLIR_DIALECT_LINALG_COMPREHENSIVEBUFFERIZE_LINALG_INTERFACE_IMPL_H
 
@@ -15,7 +23,13 @@ class BufferizationAliasInfo;
 namespace linalg_ext {
 
 struct InitTensorEliminationStep : public PostAnalysisStep {
-  /// Try to eliminate InitTensorOps inside `funcOp`.
+  /// A function that matches anchor OpOperands for InitTensorOp elimination.
+  using AnchorMatchFn = std::function<bool(OpOperand &)>;
+
+  /// A function that rewrites matched anchors.
+  using RewriteFn = std::function<Value(OpBuilder &, Location, OpOperand &)>;
+
+  /// Try to eliminate InitTensorOps inside `op`.
   ///
   /// * `rewriteFunc` generates the replacement for the InitTensorOp.
   /// * Only InitTensorOps that are anchored on a matching OpOperand as per
@@ -25,20 +39,20 @@ struct InitTensorEliminationStep : public PostAnalysisStep {
   ///   InitTensorOp.
   /// * The result of `rewriteFunc` must usually be analyzed for inplacability.
   ///   This analysis can be skipped with `skipAnalysis`.
-  LogicalResult eliminateInitTensors(
-      FuncOp funcOp, BufferizationAliasInfo &aliasInfo, DominanceInfo &domInfo,
-      std::function<bool(OpOperand &)> anchorMatchFunc,
-      std::function<Value(OpBuilder &, Location, OpOperand &)> rewriteFunc,
-      SmallVector<Operation *> &newOps);
+  LogicalResult eliminateInitTensors(Operation *op, BufferizationState &state,
+                                     BufferizationAliasInfo &aliasInfo,
+                                     AnchorMatchFn anchorMatchFunc,
+                                     RewriteFn rewriteFunc,
+                                     SmallVector<Operation *> &newOps);
 };
 
-/// Try to eliminate InitTensorOps inside funcOp that are anchored on an
+/// Try to eliminate InitTensorOps inside `op` that are anchored on an
 /// InsertSliceOp, i.e., if it is eventually inserted into another tensor
 /// (and some other conditions are met).
 struct InsertSliceAnchoredInitTensorEliminationStep
     : public InitTensorEliminationStep {
-  LogicalResult run(FuncOp funcOp, BufferizationAliasInfo &aliasInfo,
-                    DominanceInfo &domInfo,
+  LogicalResult run(Operation *op, BufferizationState &state,
+                    BufferizationAliasInfo &aliasInfo,
                     SmallVector<Operation *> &newOps) override;
 };
 

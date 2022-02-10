@@ -30,7 +30,6 @@ namespace AMDGPU {
 struct ImageDimIntrinsicInfo;
 }
 
-class AMDGPUInstrInfo;
 class AMDGPURegisterBankInfo;
 class AMDGPUTargetMachine;
 class BlockFrequencyInfo;
@@ -42,7 +41,6 @@ class MachineOperand;
 class MachineRegisterInfo;
 class RegisterBank;
 class SIInstrInfo;
-class SIMachineFunctionInfo;
 class SIRegisterInfo;
 class TargetRegisterClass;
 
@@ -299,6 +297,10 @@ private:
   bool isInlineImmediate32(int64_t Imm) const;
   bool isInlineImmediate64(int64_t Imm) const;
   bool isInlineImmediate(const APFloat &Imm) const;
+
+  // Returns true if TargetOpcode::G_AND MachineInstr `MI`'s masking of the
+  // shift amount operand's `ShAmtBits` bits is unneeded.
+  bool isUnneededShiftMask(const MachineInstr &MI, unsigned ShAmtBits) const;
 
   const SIInstrInfo &TII;
   const SIRegisterInfo &TRI;

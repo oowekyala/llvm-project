@@ -34,13 +34,13 @@
 #define MAX_NUM_KERNELS (1024 * 16)
 
 typedef struct impl_implicit_args_s {
-  unsigned long offset_x;
-  unsigned long offset_y;
-  unsigned long offset_z;
-  unsigned long hostcall_ptr;
-  unsigned long unused0;
-  unsigned long unused1;
-  unsigned long unused2;
+  uint64_t offset_x;
+  uint64_t offset_y;
+  uint64_t offset_z;
+  uint64_t hostcall_ptr;
+  uint64_t unused0;
+  uint64_t unused1;
+  uint64_t unused2;
 } impl_implicit_args_t;
 static_assert(sizeof(impl_implicit_args_t) == 56, "");
 
@@ -54,7 +54,8 @@ typedef struct atl_kernel_info_s {
   uint32_t sgpr_spill_count;
   uint32_t vgpr_spill_count;
   uint32_t kernel_segment_size;
-  uint32_t num_args;
+  uint32_t explicit_argument_count;
+  uint32_t implicit_argument_count;
 } atl_kernel_info_t;
 
 typedef struct atl_symbol_info_s {

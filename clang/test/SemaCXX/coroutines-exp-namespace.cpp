@@ -45,6 +45,7 @@ struct traits_sfinae_base<T, void_t<typename T::promise_type>> {
 
 template <class Ret, class... Args>
 struct coroutine_traits : public traits_sfinae_base<Ret> {};
+// expected-note@-1{{declared here}}
 } // namespace experimental
 } // namespace std
 
@@ -83,7 +84,7 @@ struct auto_await_suspend {
 
 struct DummyVoidTag {};
 DummyVoidTag no_specialization() { // expected-error {{this function cannot be a coroutine: 'std::experimental::coroutine_traits<DummyVoidTag>' has no member named 'promise_type'}}
-  co_await a;                      // expected-warning {{Please move from std::experimental::coroutine_traits to std::coroutine_traits}}
+  co_await a;                      // expected-warning {{support for std::experimental::coroutine_traits will be removed}}
 }
 
 template <typename... T>
@@ -978,19 +979,6 @@ extern "C" int f(mismatch_gro_type_tag4) {
   co_return; //expected-note {{function is a coroutine due to use of 'co_return' here}}
 }
 
-struct bad_promise_no_return_func { // expected-note {{'bad_promise_no_return_func' defined here}}
-  coro<bad_promise_no_return_func> get_return_object();
-  suspend_always initial_suspend();
-  suspend_always final_suspend() noexcept;
-  void unhandled_exception();
-};
-// FIXME: The PDTS currently specifies this as UB, technically forbidding a
-// diagnostic.
-coro<bad_promise_no_return_func> no_return_value_or_return_void() {
-  // expected-error@-1 {{'bad_promise_no_return_func' must declare either 'return_value' or 'return_void'}}
-  co_await a;
-}
-
 struct bad_await_suspend_return {
   bool await_ready();
   // expected-error@+1 {{return type of 'await_suspend' is required to be 'void' or 'bool' (have 'char')}}
@@ -1119,7 +1107,7 @@ struct TestType {
     static_assert(!TC.MatchesArgs<TestType *>, "");
   }
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.MatchesArgs<const TestType &>, ""); // expected-error {{static_assert failed}}
@@ -1211,7 +1199,7 @@ template CoroMemberTag TestType::test_static_template<void>(const char *volatile
 template <class... Args>
 struct DepTestType {
 
-  CoroMemberTag test_sanity(int *) const {
+  CoroMemberTag test_asserts(int *) const {
     auto TC = co_yield 0;
     static_assert(TC.template MatchesArgs<const DepTestType &>, ""); // expected-error {{static_assert failed}}
     static_assert(TC.template MatchesArgs<>, "");                    // expected-error {{static_assert failed}}

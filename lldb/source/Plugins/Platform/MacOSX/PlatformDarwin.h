@@ -60,11 +60,9 @@ public:
   bool ModuleIsExcludedForUnconstrainedSearches(
       lldb_private::Target &target, const lldb::ModuleSP &module_sp) override;
 
-  bool ARMGetSupportedArchitectureAtIndex(uint32_t idx,
-                                          lldb_private::ArchSpec &arch);
+  void ARMGetSupportedArchitectures(std::vector<lldb_private::ArchSpec> &archs);
 
-  bool x86GetSupportedArchitectureAtIndex(uint32_t idx,
-                                          lldb_private::ArchSpec &arch);
+  void x86GetSupportedArchitectures(std::vector<lldb_private::ArchSpec> &archs);
 
   uint32_t GetResumeCountForLaunchInfo(
       lldb_private::ProcessLaunchInfo &launch_info) override;

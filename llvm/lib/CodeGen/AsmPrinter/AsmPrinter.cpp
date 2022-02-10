@@ -180,7 +180,7 @@ Align AsmPrinter::getGVAlignment(const GlobalObject *GV, const DataLayout &DL,
     Alignment = InAlign;
 
   // If the GV has a specified alignment, take it into account.
-  const MaybeAlign GVAlign(GV->getAlignment());
+  const MaybeAlign GVAlign(GV->getAlign());
   if (!GVAlign)
     return Alignment;
 
@@ -288,7 +288,11 @@ bool AsmPrinter::doInitialization(Module &M) {
   // use the directive, where it would need the same conditionalization
   // anyway.
   const Triple &Target = TM.getTargetTriple();
-  OutStreamer->emitVersionForTarget(Target, M.getSDKVersion());
+  Triple TVT(M.getDarwinTargetVariantTriple());
+  OutStreamer->emitVersionForTarget(
+      Target, M.getSDKVersion(),
+      M.getDarwinTargetVariantTriple().empty() ? nullptr : &TVT,
+      M.getDarwinTargetVariantSDKVersion());
 
   // Allow the target to emit any magic that it wants at the start of the file.
   emitStartOfAsmFile(M);
@@ -910,8 +914,7 @@ static void emitKill(const MachineInstr *MI, AsmPrinter &AP) {
   std::string Str;
   raw_string_ostream OS(Str);
   OS << "kill:";
-  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &Op = MI->getOperand(i);
+  for (const MachineOperand &Op : MI->operands()) {
     assert(Op.isReg() && "KILL instruction must have only register operands");
     OS << ' ' << (Op.isDef() ? "def " : "killed ")
        << printReg(Op.getReg(), AP.MF->getSubtarget().getRegisterInfo());
@@ -1857,6 +1860,17 @@ bool AsmPrinter::doFinalization(Module &M) {
         continue;
       OutStreamer->emitSymbolAttribute(getSymbol(&GO), MCSA_WeakReference);
     }
+    if (shouldEmitWeakSwiftAsyncExtendedFramePointerFlags()) {
+      auto SymbolName = "swift_async_extendedFramePointerFlags";
+      auto Global = M.getGlobalVariable(SymbolName);
+      if (!Global) {
+        auto Int8PtrTy = Type::getInt8PtrTy(M.getContext());
+        Global = new GlobalVariable(M, Int8PtrTy, false,
+                                    GlobalValue::ExternalWeakLinkage, nullptr,
+                                    SymbolName);
+        OutStreamer->emitSymbolAttribute(getSymbol(Global), MCSA_WeakReference);
+      }
+    }
   }
 
   // Print aliases in topological order, that is, for each alias a = b,
@@ -2463,7 +2477,8 @@ void AsmPrinter::emitLabelPlusOffset(const MCSymbol *Label, uint64_t Offset,
 // two boundary.  If a global value is specified, and if that global has
 // an explicit alignment requested, it will override the alignment request
 // if required for correctness.
-void AsmPrinter::emitAlignment(Align Alignment, const GlobalObject *GV) const {
+void AsmPrinter::emitAlignment(Align Alignment, const GlobalObject *GV,
+                               unsigned MaxBytesToEmit) const {
   if (GV)
     Alignment = getGVAlignment(GV, GV->getParent()->getDataLayout(), Alignment);
 
@@ -2476,9 +2491,9 @@ void AsmPrinter::emitAlignment(Align Alignment, const GlobalObject *GV) const {
       STI = &getSubtargetInfo();
     else
       STI = TM.getMCSubtargetInfo();
-    OutStreamer->emitCodeAlignment(Alignment.value(), STI);
+    OutStreamer->emitCodeAlignment(Alignment.value(), STI, MaxBytesToEmit);
   } else
-    OutStreamer->emitValueToAlignment(Alignment.value());
+    OutStreamer->emitValueToAlignment(Alignment.value(), 0, 1, MaxBytesToEmit);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2502,6 +2517,9 @@ const MCExpr *AsmPrinter::lowerConstant(const Constant *CV) {
 
   if (const auto *Equiv = dyn_cast<DSOLocalEquivalent>(CV))
     return getObjFileLowering().lowerDSOLocalEquivalent(Equiv, TM);
+
+  if (const NoCFIValue *NC = dyn_cast<NoCFIValue>(CV))
+    return MCSymbolRefExpr::create(getSymbol(NC->getGlobalValue()), Ctx);
 
   const ConstantExpr *CE = dyn_cast<ConstantExpr>(CV);
   if (!CE) {
@@ -3269,7 +3287,7 @@ void AsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
   // Emit an alignment directive for this block, if needed.
   const Align Alignment = MBB.getAlignment();
   if (Alignment != Align(1))
-    emitAlignment(Alignment);
+    emitAlignment(Alignment, nullptr, MBB.getMaxBytesForAlignment());
 
   // Switch to a new section if this basic block must begin a section. The
   // entry block is always placed in the function section and is handled

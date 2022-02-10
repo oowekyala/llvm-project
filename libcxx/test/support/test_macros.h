@@ -146,9 +146,11 @@
 #endif
 
 #if defined(__cpp_lib_is_constant_evaluated) && __cpp_lib_is_constant_evaluated >= 201811L
-#  define TEST_IS_CONSTANT_EVALUATED std::is_constant_evaluated()
+# define TEST_IS_CONSTANT_EVALUATED std::is_constant_evaluated()
+#elif __has_builtin(__builtin_is_constant_evaluated)
+# define TEST_IS_CONSTANT_EVALUATED __builtin_is_constant_evaluated()
 #else
-#  define TEST_IS_CONSTANT_EVALUATED false
+# define TEST_IS_CONSTANT_EVALUATED false
 #endif
 
 #if TEST_STD_VER >= 14
@@ -234,11 +236,11 @@
 #define LIBCPP_ASSERT_NOT_NOEXCEPT(...) ASSERT_NOT_NOEXCEPT(__VA_ARGS__)
 #define LIBCPP_ONLY(...) __VA_ARGS__
 #else
-#define LIBCPP_ASSERT(...) ((void)0)
-#define LIBCPP_STATIC_ASSERT(...) ((void)0)
-#define LIBCPP_ASSERT_NOEXCEPT(...) ((void)0)
-#define LIBCPP_ASSERT_NOT_NOEXCEPT(...) ((void)0)
-#define LIBCPP_ONLY(...) ((void)0)
+#define LIBCPP_ASSERT(...) static_assert(true, "")
+#define LIBCPP_STATIC_ASSERT(...) static_assert(true, "")
+#define LIBCPP_ASSERT_NOEXCEPT(...) static_assert(true, "")
+#define LIBCPP_ASSERT_NOT_NOEXCEPT(...) static_assert(true, "")
+#define LIBCPP_ONLY(...) static_assert(true, "")
 #endif
 
 #if !defined(_LIBCPP_HAS_NO_RANGES)

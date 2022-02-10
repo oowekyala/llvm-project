@@ -416,8 +416,8 @@ void HexagonFrameLowering::findShrunkPrologEpilog(MachineFunction &MF,
   UnsignedMap RPO;
   RPOTType RPOT(&MF);
   unsigned RPON = 0;
-  for (RPOTType::rpo_iterator I = RPOT.begin(), E = RPOT.end(); I != E; ++I)
-    RPO[(*I)->getNumber()] = RPON++;
+  for (auto &I : RPOT)
+    RPO[I->getNumber()] = RPON++;
 
   // Don't process functions that have loops, at least for now. Placement
   // of prolog and epilog must take loop structure into account. For simpli-
@@ -1720,10 +1720,10 @@ bool HexagonFrameLowering::assignCalleeSavedSpillSlots(MachineFunction &MF,
 
   LLVM_DEBUG({
     dbgs() << "CS information: {";
-    for (unsigned i = 0, n = CSI.size(); i < n; ++i) {
-      int FI = CSI[i].getFrameIdx();
+    for (const CalleeSavedInfo &I : CSI) {
+      int FI = I.getFrameIdx();
       int Off = MFI.getObjectOffset(FI);
-      dbgs() << ' ' << printReg(CSI[i].getReg(), TRI) << ":fi#" << FI << ":sp";
+      dbgs() << ' ' << printReg(I.getReg(), TRI) << ":fi#" << FI << ":sp";
       if (Off >= 0)
         dbgs() << '+';
       dbgs() << Off;

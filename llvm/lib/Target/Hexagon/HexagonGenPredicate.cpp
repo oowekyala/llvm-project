@@ -486,8 +486,8 @@ bool HexagonGenPredicate::eliminatePredCopies(MachineFunction &MF) {
     }
   }
 
-  for (VectOfInst::iterator I = Erase.begin(), E = Erase.end(); I != E; ++I)
-    (*I)->eraseFromParent();
+  for (MachineInstr *MI : Erase)
+    MI->eraseFromParent();
 
   return Changed;
 }
@@ -505,19 +505,16 @@ bool HexagonGenPredicate::runOnMachineFunction(MachineFunction &MF) {
 
   bool Changed = false;
   collectPredicateGPR(MF);
-  for (SetOfReg::iterator I = PredGPRs.begin(), E = PredGPRs.end(); I != E; ++I)
-    processPredicateGPR(*I);
+  for (const RegisterSubReg &R : PredGPRs)
+    processPredicateGPR(R);
 
   bool Again;
   do {
     Again = false;
     VectOfInst Processed, Copy;
 
-    using iterator = VectOfInst::iterator;
-
     Copy = PUsers;
-    for (iterator I = Copy.begin(), E = Copy.end(); I != E; ++I) {
-      MachineInstr *MI = *I;
+    for (MachineInstr *MI : Copy) {
       bool Done = convertToPredForm(MI);
       if (Done) {
         Processed.insert(MI);

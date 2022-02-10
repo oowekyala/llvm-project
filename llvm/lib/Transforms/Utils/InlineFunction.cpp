@@ -1185,10 +1185,10 @@ static bool MayContainThrowingOrExitingCall(Instruction *Begin,
 
 static AttrBuilder IdentifyValidAttributes(CallBase &CB) {
 
-  AttrBuilder AB(CB.getAttributes(), AttributeList::ReturnIndex);
+  AttrBuilder AB(CB.getContext(), CB.getAttributes(), AttributeList::ReturnIndex);
   if (AB.empty())
     return AB;
-  AttrBuilder Valid;
+  AttrBuilder Valid(CB.getContext());
   // Only allow these white listed attributes to be propagated back to the
   // callee. This is because other attributes may only be valid on the call
   // itself, i.e. attributes such as signext and zeroext.
@@ -1218,10 +1218,9 @@ static void AddReturnAttributes(CallBase &CB, ValueToValueMapTy &VMap) {
     if (!RI || !isa<CallBase>(RI->getOperand(0)))
       continue;
     auto *RetVal = cast<CallBase>(RI->getOperand(0));
-    // Sanity check that the cloned RetVal exists and is a call, otherwise we
-    // cannot add the attributes on the cloned RetVal.
-    // Simplification during inlining could have transformed the cloned
-    // instruction.
+    // Check that the cloned RetVal exists and is a call, otherwise we cannot
+    // add the attributes on the cloned RetVal. Simplification during inlining
+    // could have transformed the cloned instruction.
     auto *NewRetVal = dyn_cast_or_null<CallBase>(VMap.lookup(RetVal));
     if (!NewRetVal)
       continue;

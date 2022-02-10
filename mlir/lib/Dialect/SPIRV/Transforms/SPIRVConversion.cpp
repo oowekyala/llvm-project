@@ -235,7 +235,7 @@ getTypeNumBytes(const SPIRVTypeConverter::Options &options, Type type) {
       return llvm::None;
 
     int64_t memrefSize = -1;
-    for (auto shape : enumerate(dims))
+    for (const auto &shape : enumerate(dims))
       memrefSize = std::max(memrefSize, shape.value() * strides[shape.index()]);
 
     return (offset + memrefSize) * elementSize.getValue();
@@ -557,7 +557,7 @@ FuncOpConversion::matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
     return failure();
 
   TypeConverter::SignatureConversion signatureConverter(fnType.getNumInputs());
-  for (auto argType : enumerate(fnType.getInputs())) {
+  for (const auto &argType : enumerate(fnType.getInputs())) {
     auto convertedType = getTypeConverter()->convertType(argType.value());
     if (!convertedType)
       return failure();
@@ -778,7 +778,7 @@ Value mlir::spirv::linearizeIndex(ValueRange indices, ArrayRef<int64_t> strides,
 
   Value linearizedIndex = builder.create<spirv::ConstantOp>(
       loc, integerType, IntegerAttr::get(integerType, offset));
-  for (auto index : llvm::enumerate(indices)) {
+  for (const auto &index : llvm::enumerate(indices)) {
     Value strideVal = builder.create<spirv::ConstantOp>(
         loc, integerType,
         IntegerAttr::get(integerType, strides[index.index()]));
@@ -843,22 +843,24 @@ bool SPIRVConversionTarget::isLegalOp(Operation *op) {
   // Make sure this op is available at the given version. Ops not implementing
   // QueryMinVersionInterface/QueryMaxVersionInterface are available to all
   // SPIR-V versions.
-  if (auto minVersion = dyn_cast<spirv::QueryMinVersionInterface>(op))
-    if (minVersion.getMinVersion() > this->targetEnv.getVersion()) {
+  if (auto minVersionIfx = dyn_cast<spirv::QueryMinVersionInterface>(op)) {
+    Optional<spirv::Version> minVersion = minVersionIfx.getMinVersion();
+    if (minVersion && *minVersion > this->targetEnv.getVersion()) {
       LLVM_DEBUG(llvm::dbgs()
                  << op->getName() << " illegal: requiring min version "
-                 << spirv::stringifyVersion(minVersion.getMinVersion())
-                 << "\n");
+                 << spirv::stringifyVersion(*minVersion) << "\n");
       return false;
     }
-  if (auto maxVersion = dyn_cast<spirv::QueryMaxVersionInterface>(op))
-    if (maxVersion.getMaxVersion() < this->targetEnv.getVersion()) {
+  }
+  if (auto maxVersionIfx = dyn_cast<spirv::QueryMaxVersionInterface>(op)) {
+    Optional<spirv::Version> maxVersion = maxVersionIfx.getMaxVersion();
+    if (maxVersion && *maxVersion < this->targetEnv.getVersion()) {
       LLVM_DEBUG(llvm::dbgs()
                  << op->getName() << " illegal: requiring max version "
-                 << spirv::stringifyVersion(maxVersion.getMaxVersion())
-                 << "\n");
+                 << spirv::stringifyVersion(*maxVersion) << "\n");
       return false;
     }
+  }
 
   // Make sure this op's required extensions are allowed to use. Ops not
   // implementing QueryExtensionInterface do not require extensions to be

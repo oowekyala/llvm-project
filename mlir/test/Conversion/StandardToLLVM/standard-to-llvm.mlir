@@ -454,6 +454,21 @@ func @dfs_block_order(%arg0: i32) -> (i32) {
   br ^bb1
 }
 
+// -----
+
+// CHECK-LABEL: @splat_0d
+// CHECK-SAME: %[[ARG:.*]]: f32
+func @splat_0d(%a: f32) -> vector<f32> {
+  %v = splat %a : vector<f32>
+  return %v : vector<f32>
+}
+// CHECK-NEXT: %[[UNDEF:[0-9]+]] = llvm.mlir.undef : vector<1xf32>
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK-NEXT: %[[V:[0-9]+]] = llvm.insertelement %[[ARG]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf32>
+// CHECK-NEXT: llvm.return %[[V]] : vector<1xf32>
+
+// -----
+
 // CHECK-LABEL: @splat
 // CHECK-SAME: %[[A:arg[0-9]+]]: vector<4xf32>
 // CHECK-SAME: %[[ELT:arg[0-9]+]]: f32
@@ -468,27 +483,6 @@ func @splat(%a: vector<4xf32>, %b: f32) -> vector<4xf32> {
 // CHECK-NEXT: %[[SPLAT:[0-9]+]] = llvm.shufflevector %[[V]], %[[UNDEF]] [0 : i32, 0 : i32, 0 : i32, 0 : i32]
 // CHECK-NEXT: %[[SCALE:[0-9]+]] = llvm.fmul %[[A]], %[[SPLAT]] : vector<4xf32>
 // CHECK-NEXT: llvm.return %[[SCALE]] : vector<4xf32>
-
-// -----
-
-// CHECK-LABEL: func @atomic_rmw
-func @atomic_rmw(%I : memref<10xi32>, %ival : i32, %F : memref<10xf32>, %fval : f32, %i : index) {
-  atomic_rmw assign %fval, %F[%i] : (f32, memref<10xf32>) -> f32
-  // CHECK: llvm.atomicrmw xchg %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw addi %ival, %I[%i] : (i32, memref<10xi32>) -> i32
-  // CHECK: llvm.atomicrmw add %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw maxs %ival, %I[%i] : (i32, memref<10xi32>) -> i32
-  // CHECK: llvm.atomicrmw max %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw mins %ival, %I[%i] : (i32, memref<10xi32>) -> i32
-  // CHECK: llvm.atomicrmw min %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw maxu %ival, %I[%i] : (i32, memref<10xi32>) -> i32
-  // CHECK: llvm.atomicrmw umax %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw minu %ival, %I[%i] : (i32, memref<10xi32>) -> i32
-  // CHECK: llvm.atomicrmw umin %{{.*}}, %{{.*}} acq_rel
-  atomic_rmw addf %fval, %F[%i] : (f32, memref<10xf32>) -> f32
-  // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel
-  return
-}
 
 // -----
 

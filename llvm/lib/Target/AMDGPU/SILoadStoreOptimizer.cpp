@@ -1609,7 +1609,7 @@ SILoadStoreOptimizer::getTargetRegisterClass(const CombineInfo &CI,
   }
 
   unsigned BitWidth = 32 * (CI.Width + Paired.Width);
-  return TRI->hasAGPRs(getDataRegClass(*CI.I))
+  return TRI->isAGPRClass(getDataRegClass(*CI.I))
              ? TRI->getAGPRClassForBitWidth(BitWidth)
              : TRI->getVGPRClassForBitWidth(BitWidth);
 }
@@ -1847,7 +1847,8 @@ bool SILoadStoreOptimizer::promoteConstantOffsetToImm(
   if (AMDGPU::getGlobalSaddrOp(MI.getOpcode()) < 0)
     return false;
 
-  if (MI.mayLoad() && TII->getNamedOperand(MI, AMDGPU::OpName::vdata) != NULL)
+  if (MI.mayLoad() &&
+      TII->getNamedOperand(MI, AMDGPU::OpName::vdata) != nullptr)
     return false;
 
   if (AnchorList.count(&MI))

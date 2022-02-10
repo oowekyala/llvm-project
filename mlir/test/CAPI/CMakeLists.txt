@@ -23,7 +23,7 @@ _add_capi_test_executable(mlir-capi-execution-engine-test
   execution_engine.c
 LINK_LIBS PRIVATE
   MLIRCAPIConversion
-  MLIRCEXECUTIONENGINE
+  MLIRCAPIExecutionEngine
   MLIRCAPIRegistration
 )
 
@@ -57,4 +57,12 @@ _add_capi_test_executable(mlir-capi-sparse-tensor-test
     MLIRCAPIIR
     MLIRCAPIRegistration
     MLIRCAPISparseTensor
+)
+
+_add_capi_test_executable(mlir-capi-quant-test
+  quant.c
+  LINK_LIBS PRIVATE
+    MLIRCAPIIR
+    MLIRCAPIRegistration
+    MLIRCAPIQuant
 )

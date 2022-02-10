@@ -194,6 +194,8 @@
 // MSEXT:#define _INTEGRAL_MAX_BITS 64
 // MSEXT-NOT:#define _NATIVE_WCHAR_T_DEFINED 1
 // MSEXT-NOT:#define _WCHAR_T_DEFINED 1
+// MSEXT:#define _MSVC_EXECUTION_CHARACTER_SET 65001
+// MSEXT:#define __STDC_NO_THREADS__ 1
 //
 //
 // RUN: %clang_cc1 -x c++ -fms-extensions -triple i686-pc-win32 -E -dM < /dev/null | FileCheck -match-full-lines -check-prefix MSEXT-CXX %s
@@ -1689,6 +1691,7 @@
 // WEBASSEMBLY64-NEXT:#define __LONG_MAX__ 9223372036854775807L
 // WEBASSEMBLY64-NEXT:#define __LP64__ 1
 // WEBASSEMBLY-NEXT:#define __NO_INLINE__ 1
+// WEBASSEMBLY-NEXT:#define __NO_MATH_ERRNO__ 1
 // WEBASSEMBLY-NEXT:#define __OBJC_BOOL_IS_BOOL 0
 // WEBASSEMBLY-NEXT:#define __OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES 3
 // WEBASSEMBLY-NEXT:#define __OPENCL_MEMORY_SCOPE_DEVICE 2

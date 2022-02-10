@@ -43,6 +43,7 @@
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/CostTable.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/Debug.h"
 
@@ -236,47 +237,50 @@ InstructionCost X86TTIImpl::getArithmeticInstrCost(
     }
   }
 
-  if ((ISD == ISD::MUL || ISD == ISD::SDIV || ISD == ISD::SREM ||
-       ISD == ISD::UDIV || ISD == ISD::UREM) &&
+  // Vector multiply by pow2 will be simplified to shifts.
+  if (ISD == ISD::MUL &&
+      (Op2Info == TargetTransformInfo::OK_UniformConstantValue ||
+       Op2Info == TargetTransformInfo::OK_NonUniformConstantValue) &&
+      Opd2PropInfo == TargetTransformInfo::OP_PowerOf2)
+    return getArithmeticInstrCost(Instruction::Shl, Ty, CostKind, Op1Info,
+                                  Op2Info, TargetTransformInfo::OP_None,
+                                  TargetTransformInfo::OP_None);
+
+  // On X86, vector signed division by constants power-of-two are
+  // normally expanded to the sequence SRA + SRL + ADD + SRA.
+  // The OperandValue properties may not be the same as that of the previous
+  // operation; conservatively assume OP_None.
+  if ((ISD == ISD::SDIV || ISD == ISD::SREM) &&
       (Op2Info == TargetTransformInfo::OK_UniformConstantValue ||
        Op2Info == TargetTransformInfo::OK_NonUniformConstantValue) &&
       Opd2PropInfo == TargetTransformInfo::OP_PowerOf2) {
-    // Vector multiply by pow2 will be simplified to shifts.
-    if (ISD == ISD::MUL) {
-      InstructionCost Cost = getArithmeticInstrCost(
-          Instruction::Shl, Ty, CostKind, Op1Info, Op2Info,
-          TargetTransformInfo::OP_None, TargetTransformInfo::OP_None);
-      return Cost;
+    InstructionCost Cost =
+        2 * getArithmeticInstrCost(Instruction::AShr, Ty, CostKind, Op1Info,
+                                   Op2Info, TargetTransformInfo::OP_None,
+                                   TargetTransformInfo::OP_None);
+    Cost += getArithmeticInstrCost(Instruction::LShr, Ty, CostKind, Op1Info,
+                                   Op2Info, TargetTransformInfo::OP_None,
+                                   TargetTransformInfo::OP_None);
+    Cost += getArithmeticInstrCost(Instruction::Add, Ty, CostKind, Op1Info,
+                                   Op2Info, TargetTransformInfo::OP_None,
+                                   TargetTransformInfo::OP_None);
+
+    if (ISD == ISD::SREM) {
+      // For SREM: (X % C) is the equivalent of (X - (X/C)*C)
+      Cost += getArithmeticInstrCost(Instruction::Mul, Ty, CostKind, Op1Info,
+                                     Op2Info);
+      Cost += getArithmeticInstrCost(Instruction::Sub, Ty, CostKind, Op1Info,
+                                     Op2Info);
     }
 
-    if (ISD == ISD::SDIV || ISD == ISD::SREM) {
-      // On X86, vector signed division by constants power-of-two are
-      // normally expanded to the sequence SRA + SRL + ADD + SRA.
-      // The OperandValue properties may not be the same as that of the previous
-      // operation; conservatively assume OP_None.
-      InstructionCost Cost =
-          2 * getArithmeticInstrCost(Instruction::AShr, Ty, CostKind, Op1Info,
-                                     Op2Info, TargetTransformInfo::OP_None,
-                                     TargetTransformInfo::OP_None);
-      Cost += getArithmeticInstrCost(Instruction::LShr, Ty, CostKind, Op1Info,
-                                     Op2Info, TargetTransformInfo::OP_None,
-                                     TargetTransformInfo::OP_None);
-      Cost += getArithmeticInstrCost(Instruction::Add, Ty, CostKind, Op1Info,
-                                     Op2Info, TargetTransformInfo::OP_None,
-                                     TargetTransformInfo::OP_None);
+    return Cost;
+  }
 
-      if (ISD == ISD::SREM) {
-        // For SREM: (X % C) is the equivalent of (X - (X/C)*C)
-        Cost += getArithmeticInstrCost(Instruction::Mul, Ty, CostKind, Op1Info,
-                                       Op2Info);
-        Cost += getArithmeticInstrCost(Instruction::Sub, Ty, CostKind, Op1Info,
-                                       Op2Info);
-      }
-
-      return Cost;
-    }
-
-    // Vector unsigned division/remainder will be simplified to shifts/masks.
+  // Vector unsigned division/remainder will be simplified to shifts/masks.
+  if ((ISD == ISD::UDIV || ISD == ISD::UREM) &&
+      (Op2Info == TargetTransformInfo::OK_UniformConstantValue ||
+       Op2Info == TargetTransformInfo::OK_NonUniformConstantValue) &&
+      Opd2PropInfo == TargetTransformInfo::OP_PowerOf2) {
     if (ISD == ISD::UDIV)
       return getArithmeticInstrCost(Instruction::LShr, Ty, CostKind, Op1Info,
                                     Op2Info, TargetTransformInfo::OP_None,
@@ -660,6 +664,7 @@ InstructionCost X86TTIImpl::getArithmeticInstrCost(
     { ISD::MUL,     MVT::v8i32,      1 }, // pmulld (Skylake from agner.org)
     { ISD::MUL,     MVT::v4i32,      1 }, // pmulld (Skylake from agner.org)
     { ISD::MUL,     MVT::v8i64,      6 }, // 3*pmuludq/3*shift/2*add
+    { ISD::MUL,     MVT::i64,        1 }, // Skylake from http://www.agner.org/
 
     { ISD::FNEG,    MVT::v8f64,      1 }, // Skylake from http://www.agner.org/
     { ISD::FADD,    MVT::v8f64,      1 }, // Skylake from http://www.agner.org/
@@ -3425,6 +3430,20 @@ X86TTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
   if (ICA.isTypeBasedOnly())
     return getTypeBasedIntrinsicInstrCost(ICA, CostKind);
 
+  static const CostTblEntry AVX512BWCostTbl[] = {
+    { ISD::ROTL,       MVT::v32i16,  2 },
+    { ISD::ROTL,       MVT::v16i16,  2 },
+    { ISD::ROTL,       MVT::v8i16,   2 },
+    { ISD::ROTL,       MVT::v64i8,   5 },
+    { ISD::ROTL,       MVT::v32i8,   5 },
+    { ISD::ROTL,       MVT::v16i8,   5 },
+    { ISD::ROTR,       MVT::v32i16,  2 },
+    { ISD::ROTR,       MVT::v16i16,  2 },
+    { ISD::ROTR,       MVT::v8i16,   2 },
+    { ISD::ROTR,       MVT::v64i8,   5 },
+    { ISD::ROTR,       MVT::v32i8,   5 },
+    { ISD::ROTR,       MVT::v16i8,   5 }
+  };
   static const CostTblEntry AVX512CostTbl[] = {
     { ISD::ROTL,       MVT::v8i64,   1 },
     { ISD::ROTL,       MVT::v4i64,   1 },
@@ -3502,6 +3521,10 @@ X86TTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
     MVT MTy = LT.second;
 
     // Attempt to lookup cost.
+    if (ST->hasBWI())
+      if (const auto *Entry = CostTableLookup(AVX512BWCostTbl, ISD, MTy))
+        return LT.first * Entry->Cost;
+
     if (ST->hasAVX512())
       if (const auto *Entry = CostTableLookup(AVX512CostTbl, ISD, MTy))
         return LT.first * Entry->Cost;
@@ -3770,6 +3793,10 @@ X86TTIImpl::getReplicationShuffleCost(Type *EltTy, int ReplicationFactor,
         PromEltTyBits = 8; // promote to i8, AVX512VBMI.
       else
         PromEltTyBits = 16; // promote to i16, AVX512BW.
+      break;
+    }
+    if (ST->hasDQI()) {
+      PromEltTyBits = 32; // promote to i32, AVX512F.
       break;
     }
     return bailout();
@@ -4067,7 +4094,9 @@ InstructionCost X86TTIImpl::getAddressComputationCost(Type *Ty,
   // Even in the case of (loop invariant) stride whose value is not known at
   // compile time, the address computation will not incur more than one extra
   // ADD instruction.
-  if (Ty->isVectorTy() && SE) {
+  if (Ty->isVectorTy() && SE && !ST->hasAVX2()) {
+    // TODO: AVX2 is the current cut-off because we don't have correct
+    //       interleaving costs for prior ISA's.
     if (!BaseT::isStridedAccess(Ptr))
       return NumVectorInstToHideOverhead;
     if (!BaseT::getConstantStrideStep(SE, Ptr))
@@ -5177,15 +5206,54 @@ bool X86TTIImpl::areInlineCompatible(const Function *Caller,
   const FeatureBitset &CalleeBits =
       TM.getSubtargetImpl(*Callee)->getFeatureBits();
 
+  // Check whether features are the same (apart from the ignore list).
   FeatureBitset RealCallerBits = CallerBits & ~InlineFeatureIgnoreList;
   FeatureBitset RealCalleeBits = CalleeBits & ~InlineFeatureIgnoreList;
-  return (RealCallerBits & RealCalleeBits) == RealCalleeBits;
+  if (RealCallerBits == RealCalleeBits)
+    return true;
+
+  // If the features are a subset, we need to additionally check for calls
+  // that may become ABI-incompatible as a result of inlining.
+  if ((RealCallerBits & RealCalleeBits) != RealCalleeBits)
+    return false;
+
+  for (const Instruction &I : instructions(Callee)) {
+    if (const auto *CB = dyn_cast<CallBase>(&I)) {
+      SmallVector<Type *, 8> Types;
+      for (Value *Arg : CB->args())
+        Types.push_back(Arg->getType());
+      if (!CB->getType()->isVoidTy())
+        Types.push_back(CB->getType());
+
+      // Simple types are always ABI compatible.
+      auto IsSimpleTy = [](Type *Ty) {
+        return !Ty->isVectorTy() && !Ty->isAggregateType();
+      };
+      if (all_of(Types, IsSimpleTy))
+        continue;
+
+      if (Function *NestedCallee = CB->getCalledFunction()) {
+        // Assume that intrinsics are always ABI compatible.
+        if (NestedCallee->isIntrinsic())
+          continue;
+
+        // Do a precise compatibility check.
+        if (!areTypesABICompatible(Caller, NestedCallee, Types))
+          return false;
+      } else {
+        // We don't know the target features of the callee,
+        // assume it is incompatible.
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
-bool X86TTIImpl::areFunctionArgsABICompatible(
-    const Function *Caller, const Function *Callee,
-    SmallPtrSetImpl<Argument *> &Args) const {
-  if (!BaseT::areFunctionArgsABICompatible(Caller, Callee, Args))
+bool X86TTIImpl::areTypesABICompatible(const Function *Caller,
+                                       const Function *Callee,
+                                       const ArrayRef<Type *> &Types) const {
+  if (!BaseT::areTypesABICompatible(Caller, Callee, Types))
     return false;
 
   // If we get here, we know the target features match. If one function
@@ -5200,13 +5268,8 @@ bool X86TTIImpl::areFunctionArgsABICompatible(
   // Consider the arguments compatible if they aren't vectors or aggregates.
   // FIXME: Look at the size of vectors.
   // FIXME: Look at the element types of aggregates to see if there are vectors.
-  // FIXME: The API of this function seems intended to allow arguments
-  // to be removed from the set, but the caller doesn't check if the set
-  // becomes empty so that may not work in practice.
-  return llvm::none_of(Args, [](Argument *A) {
-    auto *EltTy = cast<PointerType>(A->getType())->getElementType();
-    return EltTy->isVectorTy() || EltTy->isAggregateType();
-  });
+  return llvm::none_of(Types,
+      [](Type *T) { return T->isVectorTy() || T->isAggregateType(); });
 }
 
 X86TTIImpl::TTI::MemCmpExpansionOptions
@@ -5271,7 +5334,8 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
   auto *SingleMemOpTy = FixedVectorType::get(VecTy->getElementType(),
                                              LegalVT.getVectorNumElements());
   InstructionCost MemOpCost;
-  if (UseMaskForCond || UseMaskForGaps)
+  bool UseMaskedMemOp = UseMaskForCond || UseMaskForGaps;
+  if (UseMaskedMemOp)
     MemOpCost = getMaskedMemoryOpCost(Opcode, SingleMemOpTy, Alignment,
                                       AddressSpace, CostKind);
   else
@@ -5281,9 +5345,8 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
   unsigned VF = VecTy->getNumElements() / Factor;
   MVT VT = MVT::getVectorVT(MVT::getVT(VecTy->getScalarType()), VF);
 
-  // FIXME: this is the most conservative estimate for the mask cost.
   InstructionCost MaskCost;
-  if (UseMaskForCond || UseMaskForGaps) {
+  if (UseMaskedMemOp) {
     APInt DemandedLoadStoreElts = APInt::getZero(VecTy->getNumElements());
     for (unsigned Index : Indices) {
       assert(Index < Factor && "Invalid index for interleaved memory op");
@@ -5291,10 +5354,10 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
         DemandedLoadStoreElts.setBit(Index + Elm * Factor);
     }
 
-    Type *I8Type = Type::getInt8Ty(VecTy->getContext());
+    Type *I1Type = Type::getInt1Ty(VecTy->getContext());
 
     MaskCost = getReplicationShuffleCost(
-        I8Type, Factor, VF,
+        I1Type, Factor, VF,
         UseMaskForGaps ? DemandedLoadStoreElts
                        : APInt::getAllOnes(VecTy->getNumElements()),
         CostKind);
@@ -5305,7 +5368,7 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
     // memory access, we need to account for the cost of And-ing the two masks
     // inside the loop.
     if (UseMaskForGaps) {
-      auto *MaskVT = FixedVectorType::get(I8Type, VecTy->getNumElements());
+      auto *MaskVT = FixedVectorType::get(I1Type, VecTy->getNumElements());
       MaskCost += getArithmeticInstrCost(BinaryOperator::And, MaskVT, CostKind);
     }
   }
@@ -5346,9 +5409,10 @@ InstructionCost X86TTIImpl::getInterleavedMemoryOpCostAVX512(
         NumOfLoadsInInterleaveGrp;
 
     // About a half of the loads may be folded in shuffles when we have only
-    // one result. If we have more than one result, we do not fold loads at all.
+    // one result. If we have more than one result, or the loads are masked,
+    // we do not fold loads at all.
     unsigned NumOfUnfoldedLoads =
-        NumOfResults > 1 ? NumOfMemOps : NumOfMemOps / 2;
+        UseMaskedMemOp || NumOfResults > 1 ? NumOfMemOps : NumOfMemOps / 2;
 
     // Get a number of shuffle operations per result.
     unsigned NumOfShufflesPerResult =

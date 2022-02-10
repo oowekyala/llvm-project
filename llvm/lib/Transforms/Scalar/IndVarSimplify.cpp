@@ -138,8 +138,6 @@ AllowIVWidening("indvars-widen-indvars", cl::Hidden, cl::init(true),
 
 namespace {
 
-struct RewritePhi;
-
 class IndVarSimplify {
   LoopInfo *LI;
   ScalarEvolution *SE;
@@ -982,6 +980,7 @@ static Value *genLoopLimit(PHINode *IndVar, BasicBlock *ExitingBB,
   assert(isLoopCounter(IndVar, L, SE));
   const SCEVAddRecExpr *AR = cast<SCEVAddRecExpr>(SE->getSCEV(IndVar));
   const SCEV *IVInit = AR->getStart();
+  assert(AR->getStepRecurrence(*SE)->isOne() && "only handles unit stride");
 
   // IVInit may be a pointer while ExitCount is an integer when FindLoopCounter
   // finds a valid pointer IV. Sign extend ExitCount in order to materialize a
@@ -1004,13 +1003,6 @@ static Value *genLoopLimit(PHINode *IndVar, BasicBlock *ExitingBB,
     assert(SE->isLoopInvariant(IVOffset, L) &&
            "Computed iteration count is not loop invariant!");
 
-    // We could handle pointer IVs other than i8*, but we need to compensate for
-    // gep index scaling.
-    assert(SE->getSizeOfExpr(IntegerType::getInt64Ty(IndVar->getContext()),
-                             cast<PointerType>(IndVar->getType())
-                                 ->getElementType())->isOne() &&
-           "unit stride pointer IV must be i8*");
-
     const SCEV *IVLimit = SE->getAddExpr(IVInit, IVOffset);
     BranchInst *BI = cast<BranchInst>(ExitingBB->getTerminator());
     return Rewriter.expandCodeFor(IVLimit, IndVar->getType(), BI);
@@ -1026,7 +1018,6 @@ static Value *genLoopLimit(PHINode *IndVar, BasicBlock *ExitingBB,
     // IVInit integer and ExitCount pointer would only occur if a canonical IV
     // were generated on top of case #2, which is not expected.
 
-    assert(AR->getStepRecurrence(*SE)->isOne() && "only handles unit stride");
     // For unit stride, IVCount = Start + ExitCount with 2's complement
     // overflow.
 
@@ -1951,7 +1942,6 @@ bool IndVarSimplify::run(Loop *L) {
   // using it.
   if (!DisableLFTR) {
     BasicBlock *PreHeader = L->getLoopPreheader();
-    BranchInst *PreHeaderBR = cast<BranchInst>(PreHeader->getTerminator());
 
     SmallVector<BasicBlock*, 16> ExitingBlocks;
     L->getExitingBlocks(ExitingBlocks);
@@ -1987,7 +1977,7 @@ bool IndVarSimplify::run(Loop *L) {
       // Avoid high cost expansions.  Note: This heuristic is questionable in
       // that our definition of "high cost" is not exactly principled.
       if (Rewriter.isHighCostExpansion(ExitCount, L, SCEVCheapExpansionBudget,
-                                       TTI, PreHeaderBR))
+                                       TTI, PreHeader->getTerminator()))
         continue;
 
       // Check preconditions for proper SCEVExpander operation. SCEV does not

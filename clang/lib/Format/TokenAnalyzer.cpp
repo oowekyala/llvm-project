@@ -37,7 +37,7 @@ namespace format {
 
 // FIXME: Instead of printing the diagnostic we should store it and have a
 // better way to return errors through the format APIs.
-class FatalDiagnosticConsumer: public DiagnosticConsumer {
+class FatalDiagnosticConsumer : public DiagnosticConsumer {
 public:
   void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
                         const Diagnostic &Info) override {
@@ -71,7 +71,8 @@ Environment::make(StringRef Code, StringRef FileName,
   }
   // Validate that we can get the buffer data without a fatal error.
   Env->SM.getBufferData(Env->ID);
-  if (Diags.fatalError()) return nullptr;
+  if (Diags.fatalError())
+    return nullptr;
   return Env;
 }
 
@@ -80,8 +81,7 @@ Environment::Environment(StringRef Code, StringRef FileName,
                          unsigned LastStartColumn)
     : VirtualSM(new SourceManagerForFile(FileName, Code)), SM(VirtualSM->get()),
       ID(VirtualSM->get().getMainFileID()), FirstStartColumn(FirstStartColumn),
-      NextStartColumn(NextStartColumn), LastStartColumn(LastStartColumn) {
-}
+      NextStartColumn(NextStartColumn), LastStartColumn(LastStartColumn) {}
 
 TokenAnalyzer::TokenAnalyzer(const Environment &Env, const FormatStyle &Style)
     : Style(Style), Env(Env),
@@ -127,11 +127,8 @@ std::pair<tooling::Replacements, unsigned> TokenAnalyzer::process() {
 
     LLVM_DEBUG({
       llvm::dbgs() << "Replacements for run " << Run << ":\n";
-      for (tooling::Replacements::const_iterator I = RunResult.first.begin(),
-                                                 E = RunResult.first.end();
-           I != E; ++I) {
-        llvm::dbgs() << I->toString() << "\n";
-      }
+      for (const tooling::Replacement &Fix : RunResult.first)
+        llvm::dbgs() << Fix.toString() << "\n";
     });
     for (unsigned i = 0, e = AnnotatedLines.size(); i != e; ++i) {
       delete AnnotatedLines[i];

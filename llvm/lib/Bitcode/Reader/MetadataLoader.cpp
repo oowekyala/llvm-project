@@ -444,7 +444,8 @@ class MetadataLoader::MetadataLoaderImpl {
   uint64_t GlobalDeclAttachmentPos = 0;
 
 #ifndef NDEBUG
-  /// Sanity check that we end up parsing all of the global decl attachments.
+  /// Baisic correctness check that we end up parsing all of the global decl
+  /// attachments.
   unsigned NumGlobalDeclAttachSkipped = 0;
   unsigned NumGlobalDeclAttachParsed = 0;
 #endif
@@ -917,7 +918,7 @@ Expected<bool> MetadataLoader::MetadataLoaderImpl::loadGlobalDeclAttachments() {
     case BitstreamEntry::Error:
       return error("Malformed block");
     case BitstreamEntry::EndBlock:
-      // Sanity check that we parsed them all.
+      // Check that we parsed them all.
       assert(NumGlobalDeclAttachSkipped == NumGlobalDeclAttachParsed);
       return true;
     case BitstreamEntry::Record:
@@ -929,7 +930,7 @@ Expected<bool> MetadataLoader::MetadataLoaderImpl::loadGlobalDeclAttachments() {
       return MaybeCode.takeError();
     if (MaybeCode.get() != bitc::METADATA_GLOBAL_DECL_ATTACHMENT) {
       // Anything other than a global decl attachment signals the end of
-      // these records. sanity check that we parsed them all.
+      // these records. Check that we parsed them all.
       assert(NumGlobalDeclAttachSkipped == NumGlobalDeclAttachParsed);
       return true;
     }
@@ -1104,7 +1105,7 @@ void MetadataLoader::MetadataLoaderImpl::lazyLoadOneMetadata(
 void MetadataLoader::MetadataLoaderImpl::resolveForwardRefsAndPlaceholders(
     PlaceholderQueue &Placeholders) {
   DenseSet<unsigned> Temporaries;
-  while (1) {
+  while (true) {
     // Populate Temporaries with the placeholders that haven't been loaded yet.
     Placeholders.getTemporaries(MetadataList, Temporaries);
 
@@ -1631,7 +1632,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
         Record.size() <= 16 ? true : Record[16],
         Record.size() <= 17 ? false : Record[17],
         Record.size() <= 18 ? 0 : Record[18],
-        Record.size() <= 19 ? 0 : Record[19],
+        Record.size() <= 19 ? false : Record[19],
         Record.size() <= 20 ? nullptr : getMDString(Record[20]),
         Record.size() <= 21 ? nullptr : getMDString(Record[21]));
 
@@ -1674,7 +1675,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
       SPFlags = DISubprogram::toSPFlags(
           /*IsLocalToUnit=*/Record[7], /*IsDefinition=*/Record[8],
           /*IsOptimized=*/Record[14], /*Virtuality=*/Record[11],
-          /*DIFlagMainSubprogram=*/HasOldMainSubprogramFlag);
+          /*IsMainSubprogram=*/HasOldMainSubprogramFlag);
 
     // All definitions should be distinct.
     IsDistinct = (Record[0] & 1) || (SPFlags & DISubprogram::SPFlagDefinition);

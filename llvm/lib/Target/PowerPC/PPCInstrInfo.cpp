@@ -2138,9 +2138,8 @@ bool PPCInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
 }
 
 static bool MBBDefinesCTR(MachineBasicBlock &MBB) {
-  for (MachineBasicBlock::iterator I = MBB.begin(), IE = MBB.end();
-       I != IE; ++I)
-    if (I->definesRegister(PPC::CTR) || I->definesRegister(PPC::CTR8))
+  for (MachineInstr &MI : MBB)
+    if (MI.definesRegister(PPC::CTR) || MI.definesRegister(PPC::CTR8))
       return true;
   return false;
 }
@@ -2331,8 +2330,7 @@ bool PPCInstrInfo::ClobbersPredicate(MachineInstr &MI,
       &PPC::CTRRCRegClass, &PPC::CTRRC8RegClass };
 
   bool Found = false;
-  for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI.getOperand(i);
+  for (const MachineOperand &MO : MI.operands()) {
     for (unsigned c = 0; c < array_lengthof(RCs) && !Found; ++c) {
       const TargetRegisterClass *RC = RCs[c];
       if (MO.isReg()) {
@@ -5268,7 +5266,7 @@ PPCInstrInfo::isSignOrZeroExtended(const MachineInstr &MI, bool SignExt,
     if (!Register::isVirtualRegister(SrcReg))
       return false;
     const MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
-    if (SrcMI != NULL)
+    if (SrcMI != nullptr)
       return isSignOrZeroExtended(*SrcMI, SignExt, Depth);
 
     return false;
@@ -5292,7 +5290,7 @@ PPCInstrInfo::isSignOrZeroExtended(const MachineInstr &MI, bool SignExt,
     if (!Register::isVirtualRegister(SrcReg))
       return false;
     const MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
-    if (SrcMI != NULL)
+    if (SrcMI != nullptr)
       return isSignOrZeroExtended(*SrcMI, SignExt, Depth);
 
     return false;
@@ -5321,7 +5319,8 @@ PPCInstrInfo::isSignOrZeroExtended(const MachineInstr &MI, bool SignExt,
         if (!Register::isVirtualRegister(SrcReg))
           return false;
         const MachineInstr *SrcMI = MRI->getVRegDef(SrcReg);
-        if (SrcMI == NULL || !isSignOrZeroExtended(*SrcMI, SignExt, Depth+1))
+        if (SrcMI == nullptr ||
+            !isSignOrZeroExtended(*SrcMI, SignExt, Depth + 1))
           return false;
       }
       else

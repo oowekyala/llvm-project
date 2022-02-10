@@ -500,6 +500,8 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     Opts.CodeComplete.BundleOverloads = Params.capabilities.HasSignatureHelp;
   Opts.CodeComplete.DocumentationFormat =
       Params.capabilities.CompletionDocumentationFormat;
+  Opts.SignatureHelpDocumentationFormat =
+      Params.capabilities.SignatureHelpDocumentationFormat;
   DiagOpts.EmbedFixesInDiagnostics = Params.capabilities.DiagnosticFixes;
   DiagOpts.SendDiagnosticCategory = Params.capabilities.DiagnosticCategory;
   DiagOpts.EmitRelatedLocations =
@@ -553,7 +555,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
        }},
       {"signatureHelpProvider",
        llvm::json::Object{
-           {"triggerCharacters", {"(", ","}},
+           {"triggerCharacters", {"(", ")", "{", "}", "<", ">", ","}},
        }},
       {"declarationProvider", true},
       {"definitionProvider", true},
@@ -606,6 +608,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
   if (Opts.FoldingRanges)
     ServerCaps["foldingRangeProvider"] = true;
 
+  // FIXME: once inlayHints can be disabled in config, always advertise.
   if (Opts.InlayHints)
     ServerCaps["clangdInlayHintsProvider"] = true;
 
@@ -1058,6 +1061,7 @@ void ClangdLSPServer::onCompletion(const CompletionParams &Params,
 void ClangdLSPServer::onSignatureHelp(const TextDocumentPositionParams &Params,
                                       Callback<SignatureHelp> Reply) {
   Server->signatureHelp(Params.textDocument.uri.file(), Params.position,
+                        Opts.SignatureHelpDocumentationFormat,
                         [Reply = std::move(Reply), this](
                             llvm::Expected<SignatureHelp> Signature) mutable {
                           if (!Signature)
@@ -1205,16 +1209,10 @@ void ClangdLSPServer::onCallHierarchyIncomingCalls(
   Server->incomingCalls(Params.item, std::move(Reply));
 }
 
-void ClangdLSPServer::onCallHierarchyOutgoingCalls(
-    const CallHierarchyOutgoingCallsParams &Params,
-    Callback<std::vector<CallHierarchyOutgoingCall>> Reply) {
-  // FIXME: To be implemented.
-  Reply(std::vector<CallHierarchyOutgoingCall>{});
-}
-
 void ClangdLSPServer::onInlayHints(const InlayHintsParams &Params,
                                    Callback<std::vector<InlayHint>> Reply) {
-  Server->inlayHints(Params.textDocument.uri.file(), std::move(Reply));
+  Server->inlayHints(Params.textDocument.uri.file(), Params.range,
+                     std::move(Reply));
 }
 
 void ClangdLSPServer::applyConfiguration(
@@ -1475,7 +1473,6 @@ void ClangdLSPServer::bindMethods(LSPBinder &Bind,
   Bind.method("typeHierarchy/resolve", this, &ClangdLSPServer::onResolveTypeHierarchy);
   Bind.method("textDocument/prepareCallHierarchy", this, &ClangdLSPServer::onPrepareCallHierarchy);
   Bind.method("callHierarchy/incomingCalls", this, &ClangdLSPServer::onCallHierarchyIncomingCalls);
-  Bind.method("callHierarchy/outgoingCalls", this, &ClangdLSPServer::onCallHierarchyOutgoingCalls);
   Bind.method("textDocument/selectionRange", this, &ClangdLSPServer::onSelectionRange);
   Bind.method("textDocument/documentLink", this, &ClangdLSPServer::onDocumentLink);
   Bind.method("textDocument/semanticTokens/full", this, &ClangdLSPServer::onSemanticTokens);
