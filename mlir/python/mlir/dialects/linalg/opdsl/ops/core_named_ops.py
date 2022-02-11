@@ -12,23 +12,27 @@ def conv_2d_relu(
     K=TensorDef(T2, S.F, S.C, S.KH, S.KW),
     B=TensorDef(T3, S.F),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    stride=AttributeDef(S.SH, S.SW),
-    dilation=AttributeDef(S.DH, S.DW)):
+    stride=IndexAttrDef(S.SH, S.SW),
+    dilation=IndexAttrDef(S.DH, S.DW)):
   """Performs fused 2-D convolution and relu.
 
   Layout:
     * Input: NCHW.
     * Kernel: FCHW.
 
-  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
-  is incorrect. Implementation of correct conv2d_relu functionality. Current 
-  inner loop functioality is dummy implementation
+  Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+  is incorrect. Implementation of correct conv2d_relu functionality. Current
+  inner loop functionality is a dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
-  O[D.n, D.f, D.oh, D.ow] += PrimFn.max(cast(U, const(0.0)), (cast(U, B[D.f]) + cast(
-      U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW
-           ]) * cast(U, K[D.f, D.c, D.kh, D.kw])))
+  O[D.n, D.f, D.oh, D.ow] += ArithFn.max(
+      TypeFn.cast(U, const(0.0)),
+      ( TypeFn.cast(U, B[D.f])
+      + TypeFn.cast(U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW])
+      * TypeFn.cast(U, K[D.f, D.c, D.kh, D.kw])
+      )
+  )
 
 @linalg_structured_op
 def conv_2d_lrelu(
@@ -37,23 +41,24 @@ def conv_2d_lrelu(
     B=TensorDef(T3, S.F),
     alpha=ScalarDef(F32),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    stride=AttributeDef(S.SH, S.SW),
-    dilation=AttributeDef(S.DH, S.DW)):
+    stride=IndexAttrDef(S.SH, S.SW),
+    dilation=IndexAttrDef(S.DH, S.DW)):
   """Performs fused 2-D convolution and leaky-relu.
 
   Layout:
     * Input: NCHW.
     * Kernel: FCHW.
 
-  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
-  is incorrect. Implementation of correct conv2d_lrelu functionality. Current 
-  inner loop functioality is dummy implementation
+  Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+  is incorrect. Implementation of correct conv2d_lrelu functionality. Current
+  inner loop functionality is a dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
-  O[D.n, D.f, D.oh, D.ow] += alpha * (cast(U, B[D.f]) + cast(
-      U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW
-           ]) * cast(U, K[D.f, D.c, D.kh, D.kw]))
+  O[D.n, D.f, D.oh, D.ow] += alpha * (TypeFn.cast(U, B[D.f]) + TypeFn.cast(
+      U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH,
+                     D.ow * S.SW + D.kw * S.DW])
+         * TypeFn.cast(U, K[D.f, D.c, D.kh, D.kw]))
 
 @linalg_structured_op
 def conv_2d_lrelu_maxpool(
@@ -62,27 +67,27 @@ def conv_2d_lrelu_maxpool(
     B=TensorDef(T3, S.F),
     alpha=ScalarDef(F32),
     O=TensorDef(U, S.N, S.F, S.OH, S.OW, output=True),
-    stride=AttributeDef(S.SH, S.SW),
-    dilation=AttributeDef(S.DH, S.DW),
-    mp_kernel_size=AttributeDef(S.MKH, S.MKW),
-    mp_stride=AttributeDef(S.MSH, S.MSW),
-    mp_padding=AttributeDef(S.MPHL, S.MPHH, S.MPWL, S.MPWH),
-    mp_dilation=AttributeDef(S.MDH, S.MDW)):
+    stride=IndexAttrDef(S.SH, S.SW),
+    dilation=IndexAttrDef(S.DH, S.DW),
+    mp_kernel_size=IndexAttrDef(S.MKH, S.MKW),
+    mp_stride=IndexAttrDef(S.MSH, S.MSW),
+    mp_padding=IndexAttrDef(S.MPHL, S.MPHH, S.MPWL, S.MPWH),
+    mp_dilation=IndexAttrDef(S.MDH, S.MDW)):
   """Performs fused 2-D convolution, leaky-relu and max-pool.
 
   Layout:
     * Input: NCHW.
     * Kernel: FCHW.
 
-  ToDo: When this fues op is lowerd to generic/affine/loops the innier loop functionality 
-  is incorrect. Implementation of correct conv2d_lrelu_maxpool functionality. Current 
-  inner loop functioality is dummy implementation
+  Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+  is incorrect. Implementation of correct conv2d_lrelu_maxpool functionality. Current
+  inner loop functionality is a dummy implementation
   """
   implements(ConvolutionOpInterface)
   domain(D.n, D.f, D.oh, D.ow, D.c, D.kh, D.kw)
-  O[D.n, D.f, D.oh, D.ow] += alpha * (cast(U, B[D.f]) + cast(
+  O[D.n, D.f, D.oh, D.ow] += alpha * (TypeFn.cast(U, B[D.f]) + TypeFn.cast(
       U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW
-           ]) * cast(U, K[D.f, D.c, D.kh, D.kw]))
+           ]) * TypeFn.cast(U, K[D.f, D.c, D.kh, D.kw]))
 
 @linalg_structured_op
 def matmul(

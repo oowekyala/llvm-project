@@ -4,10 +4,16 @@
 metadata: !LinalgOpMetadata
   name: conv_2d_relu
   cpp_class_name: Conv2DReluOp
-  doc: "Performs fused 2-D convolution and relu.\n\nLayout:\n  * Input: NCHW.\n  *\
-    \ Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops the\
-    \ innier loop functionality \nis incorrect. Implementation of correct conv2d_relu\
-    \ functionality. Current \ninner loop functioality is dummy implementation"
+  doc: |-
+    Performs fused 2-D convolution and relu.
+
+    Layout:
+      * Input: NCHW.
+      * Kernel: FCHW.
+
+    Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+    is incorrect. Implementation of correct conv2d_relu functionality. Current
+    inner loop functionality is a dummy implementation
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -69,59 +75,65 @@ structured_op: !LinalgStructuredOpConfig
   - !ScalarAssign
     arg: O
     value: !ScalarExpression
-      scalar_apply:
+      arith_fn:
         fn_name: add
         operands:
         - !ScalarExpression
           scalar_arg: O
         - !ScalarExpression
-          scalar_apply:
+          arith_fn:
             fn_name: max
             operands:
             - !ScalarExpression
-              symbolic_cast:
+              type_fn:
+                fn_name: cast
                 type_var: U
                 operands:
                 - !ScalarExpression
                   scalar_const: '0.000000e+00 : f64'
-                is_unsigned_cast: false
             - !ScalarExpression
-              scalar_apply:
+              arith_fn:
                 fn_name: add
                 operands:
                 - !ScalarExpression
-                  symbolic_cast:
+                  type_fn:
+                    fn_name: cast
                     type_var: U
                     operands:
                     - !ScalarExpression
                       scalar_arg: B
-                    is_unsigned_cast: false
                 - !ScalarExpression
-                  scalar_apply:
+                  arith_fn:
                     fn_name: mul
                     operands:
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: I
-                        is_unsigned_cast: false
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: K
-                        is_unsigned_cast: false
 --- !LinalgOpConfig
 metadata: !LinalgOpMetadata
   name: conv_2d_lrelu
   cpp_class_name: Conv2DLreluOp
-  doc: "Performs fused 2-D convolution and leaky-relu.\n\nLayout:\n  * Input: NCHW.\n\
-    \  * Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops\
-    \ the innier loop functionality \nis incorrect. Implementation of correct conv2d_lrelu\
-    \ functionality. Current \ninner loop functioality is dummy implementation"
+  doc: |-
+    Performs fused 2-D convolution and leaky-relu.
+
+    Layout:
+      * Input: NCHW.
+      * Kernel: FCHW.
+
+    Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+    is incorrect. Implementation of correct conv2d_lrelu functionality. Current
+    inner loop functionality is a dummy implementation
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -189,54 +201,60 @@ structured_op: !LinalgStructuredOpConfig
   - !ScalarAssign
     arg: O
     value: !ScalarExpression
-      scalar_apply:
+      arith_fn:
         fn_name: add
         operands:
         - !ScalarExpression
           scalar_arg: O
         - !ScalarExpression
-          scalar_apply:
+          arith_fn:
             fn_name: mul
             operands:
             - !ScalarExpression
               scalar_arg: alpha
             - !ScalarExpression
-              scalar_apply:
+              arith_fn:
                 fn_name: add
                 operands:
                 - !ScalarExpression
-                  symbolic_cast:
+                  type_fn:
+                    fn_name: cast
                     type_var: U
                     operands:
                     - !ScalarExpression
                       scalar_arg: B
-                    is_unsigned_cast: false
                 - !ScalarExpression
-                  scalar_apply:
+                  arith_fn:
                     fn_name: mul
                     operands:
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: I
-                        is_unsigned_cast: false
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: K
-                        is_unsigned_cast: false
 --- !LinalgOpConfig
 metadata: !LinalgOpMetadata
   name: conv_2d_lrelu_maxpool
   cpp_class_name: Conv2DLreluMaxpoolOp
-  doc: "Performs fused 2-D convolution, leaky-relu and max-pool.\n\nLayout:\n  * Input:\
-    \ NCHW.\n  * Kernel: FCHW.\n\nToDo: When this fues op is lowerd to generic/affine/loops\
-    \ the innier loop functionality \nis incorrect. Implementation of correct conv2d_lrelu_maxpool\
-    \ functionality. Current \ninner loop functioality is dummy implementation"
+  doc: |-
+    Performs fused 2-D convolution, leaky-relu and max-pool.
+
+    Layout:
+      * Input: NCHW.
+      * Kernel: FCHW.
+
+    Todo: When this fused op is lowered to generic/affine/loops the inner loop functionality
+    is incorrect. Implementation of correct conv2d_lrelu_maxpool functionality. Current
+    inner loop functionality is a dummy implementation
   implements:
   - LinalgConvolutionOpInterface
 structured_op: !LinalgStructuredOpConfig
@@ -331,46 +349,46 @@ structured_op: !LinalgStructuredOpConfig
   - !ScalarAssign
     arg: O
     value: !ScalarExpression
-      scalar_apply:
+      arith_fn:
         fn_name: add
         operands:
         - !ScalarExpression
           scalar_arg: O
         - !ScalarExpression
-          scalar_apply:
+          arith_fn:
             fn_name: mul
             operands:
             - !ScalarExpression
               scalar_arg: alpha
             - !ScalarExpression
-              scalar_apply:
+              arith_fn:
                 fn_name: add
                 operands:
                 - !ScalarExpression
-                  symbolic_cast:
+                  type_fn:
+                    fn_name: cast
                     type_var: U
                     operands:
                     - !ScalarExpression
                       scalar_arg: B
-                    is_unsigned_cast: false
                 - !ScalarExpression
-                  scalar_apply:
+                  arith_fn:
                     fn_name: mul
                     operands:
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: I
-                        is_unsigned_cast: false
                     - !ScalarExpression
-                      symbolic_cast:
+                      type_fn:
+                        fn_name: cast
                         type_var: U
                         operands:
                         - !ScalarExpression
                           scalar_arg: K
-                        is_unsigned_cast: false
 --- !LinalgOpConfig
 metadata: !LinalgOpMetadata
   name: matmul
