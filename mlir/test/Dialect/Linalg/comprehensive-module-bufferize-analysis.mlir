@@ -630,7 +630,7 @@ func @scf_for_deps(
   // of %r1 is read.
   //      CHECK: scf.for
   // CHECK-NEXT: call
-  // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
+  // CHECK-SAME: {__inplace_operands_attr__ = ["false"]}
   // CHECK-NEXT: scf.yield
   // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
   //      CHECK: } {__inplace_operands_attr__ = ["none", "none", "none", "false"]}
@@ -642,7 +642,7 @@ func @scf_for_deps(
   // %r1 bufferizes inplace fine.
   //      CHECK: scf.for
   // CHECK-NEXT: call
-  // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
+  // CHECK-SAME: {__inplace_operands_attr__ = ["false"]}
   // CHECK-NEXT: scf.yield
   // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
   //      CHECK: } {__inplace_operands_attr__ = ["none", "none", "none", "true"]}
@@ -655,7 +655,7 @@ func @scf_for_deps(
   // of %r3 is read.
   //      CHECK: linalg.tiled_loop
   // CHECK-NEXT: call
-  // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
+  // CHECK-SAME: {__inplace_operands_attr__ = ["false"]}
   // CHECK-NEXT: linalg.yield
   // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
   //      CHECK: } {__inplace_operands_attr__ = ["none", "none", "none", "false"]}
@@ -669,7 +669,7 @@ func @scf_for_deps(
   // %r3 bufferizes inplace fine.
   //      CHECK: linalg.tiled_loop
   // CHECK-NEXT: call
-  // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
+  // CHECK-SAME: {__inplace_operands_attr__ = ["false"]}
   // CHECK-NEXT: linalg.yield
   // CHECK-SAME: {__inplace_operands_attr__ = ["true"]}
   //      CHECK: } {__inplace_operands_attr__ = ["none", "none", "none", "true"]}
@@ -1709,4 +1709,85 @@ func @equivalent_func_arg_2(%c0: index, %c10: index, %c1: index, %t0: tensor<?xf
     scf.yield %3 : tensor<?xf32>
   }
   return %1: tensor<?xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @write_after_select_read_one
+//  CHECK-SAME:     %[[t1:.*]]: tensor<?xf32> {{.*}}, %[[t2:.*]]: tensor<?xf32>
+func @write_after_select_read_one(
+    %t1 : tensor<?xf32> {linalg.inplaceable = true},
+    %t2 : tensor<?xf32> {linalg.inplaceable = true},
+    %c : i1)
+  -> (f32, tensor<?xf32>)
+{
+  %cst = arith.constant 0.0 : f32
+  %idx = arith.constant 0 : index
+
+  //      CHECK: select %{{.*}}, %[[t1]], %[[t2]]
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "false", "true"]}
+  %s = std.select %c, %t1, %t2 : tensor<?xf32>
+  //      CHECK: tensor.insert
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "true", "none"]}
+  %w = tensor.insert %cst into %s[%idx] : tensor<?xf32>
+  //      CHECK: tensor.extract
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["true", "none"]}
+  %f = tensor.extract %t1[%idx] : tensor<?xf32>
+
+  return %f, %w : f32, tensor<?xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @write_after_select_read_both
+//  CHECK-SAME:     %[[t1:.*]]: tensor<?xf32> {{.*}}, %[[t2:.*]]: tensor<?xf32>
+func @write_after_select_read_both(
+    %t1 : tensor<?xf32> {linalg.inplaceable = true},
+    %t2 : tensor<?xf32> {linalg.inplaceable = true},
+    %c : i1)
+  -> (f32, f32, tensor<?xf32>)
+{
+  %cst = arith.constant 0.0 : f32
+  %idx = arith.constant 0 : index
+
+  //      CHECK: select %{{.*}}, %[[t1]], %[[t2]]
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "false", "false"]}
+  %s = std.select %c, %t1, %t2 : tensor<?xf32>
+  //      CHECK: tensor.insert
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "true", "none"]}
+  %w = tensor.insert %cst into %s[%idx] : tensor<?xf32>
+  //      CHECK: tensor.extract
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["true", "none"]}
+  %f = tensor.extract %t1[%idx] : tensor<?xf32>
+  //      CHECK: tensor.extract
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["true", "none"]}
+  %f2 = tensor.extract %t2[%idx] : tensor<?xf32>
+
+  return %f, %f2, %w : f32, f32, tensor<?xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @write_after_select_no_conflict
+//  CHECK-SAME:     %[[t1:.*]]: tensor<?xf32> {{.*}}, %[[t2:.*]]: tensor<?xf32>
+func @write_after_select_no_conflict(
+    %t1 : tensor<?xf32> {linalg.inplaceable = true},
+    %t2 : tensor<?xf32> {linalg.inplaceable = true},
+    %c : i1)
+  -> (f32, tensor<?xf32>)
+{
+  %cst = arith.constant 0.0 : f32
+  %idx = arith.constant 0 : index
+
+  //      CHECK: select %{{.*}}, %[[t1]], %[[t2]]
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "true", "true"]}
+  %s = std.select %c, %t1, %t2 : tensor<?xf32>
+  //      CHECK: tensor.insert
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["none", "true", "none"]}
+  %w = tensor.insert %cst into %s[%idx] : tensor<?xf32>
+  //      CHECK: tensor.extract
+  // CHECK-SAME:   {__inplace_operands_attr__ = ["true", "none"]}
+  %f = tensor.extract %w[%idx] : tensor<?xf32>
+
+  return %f, %w : f32, tensor<?xf32>
 }

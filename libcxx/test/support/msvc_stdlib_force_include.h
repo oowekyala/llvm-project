@@ -62,9 +62,6 @@ const AssertionDialogAvoider assertion_dialog_avoider{};
     #pragma warning(disable: 28251) // Inconsistent annotation for 'new': this instance has no annotations.
 #endif // !defined(__clang__)
 
-// MSVC doesn't have __int128_t.
-#define _LIBCPP_HAS_NO_INT128
-
 #ifndef _LIBCXX_IN_DEVCRT
     // atomic_is_lock_free.pass.cpp needs this VS 2015 Update 2 fix.
     #define _ENABLE_ATOMIC_ALIGNMENT_FIX
@@ -103,9 +100,5 @@ const AssertionDialogAvoider assertion_dialog_avoider{};
 #define _LIBCPP_SUPPRESS_DEPRECATED_POP \
     __pragma(warning(pop))
 #endif // __clang__
-
-#if defined(_MSVC_EXECUTION_CHARACTER_SET) && _MSVC_EXECUTION_CHARACTER_SET != 65001
-#define _LIBCPP_HAS_NO_UNICODE 1
-#endif
 
 #endif // SUPPORT_MSVC_STDLIB_FORCE_INCLUDE_H

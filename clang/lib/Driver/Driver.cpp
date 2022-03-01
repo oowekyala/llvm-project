@@ -62,6 +62,7 @@
 #include "clang/Driver/SanitizerArgs.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
+#include "clang/Driver/Types.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
@@ -326,7 +327,8 @@ phases::ID Driver::getFinalPhase(const DerivedArgList &DAL,
              (PhaseArg = DAL.getLastArg(options::OPT_rewrite_legacy_objc)) ||
              (PhaseArg = DAL.getLastArg(options::OPT__migrate)) ||
              (PhaseArg = DAL.getLastArg(options::OPT__analyze)) ||
-             (PhaseArg = DAL.getLastArg(options::OPT_emit_ast))) {
+             (PhaseArg = DAL.getLastArg(options::OPT_emit_ast)) ||
+             (PhaseArg = DAL.getLastArg(options::OPT_extract_api))) {
     FinalPhase = phases::Compile;
 
   // -S only runs up to the backend.
@@ -367,7 +369,20 @@ DerivedArgList *Driver::TranslateInputArgs(const InputArgList &Args) const {
   bool HasNostdlib = Args.hasArg(options::OPT_nostdlib);
   bool HasNostdlibxx = Args.hasArg(options::OPT_nostdlibxx);
   bool HasNodefaultlib = Args.hasArg(options::OPT_nodefaultlibs);
+  bool IgnoreUnused = false;
   for (Arg *A : Args) {
+    if (IgnoreUnused)
+      A->claim();
+
+    if (A->getOption().matches(options::OPT_start_no_unused_arguments)) {
+      IgnoreUnused = true;
+      continue;
+    }
+    if (A->getOption().matches(options::OPT_end_no_unused_arguments)) {
+      IgnoreUnused = false;
+      continue;
+    }
+
     // Unfortunately, we have to parse some forwarding options (-Xassembler,
     // -Xlinker, -Xpreprocessor) because we either integrate their functionality
     // (assembler and preprocessor), or bypass a previous driver ('collect2').
@@ -760,6 +775,18 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
         for (const char *Val : OpenMPTargets->getValues()) {
           llvm::Triple TT(Val);
           std::string NormalizedName = TT.normalize();
+
+          // We want to expand the shortened versions of the triples passed in to
+          // the values used for the bitcode libraries for convenience.
+          if (TT.getVendor() == llvm::Triple::UnknownVendor ||
+              TT.getOS() == llvm::Triple::UnknownOS) {
+            if (TT.getArch() == llvm::Triple::nvptx)
+              TT = llvm::Triple("nvptx-nvidia-cuda");
+            else if (TT.getArch() == llvm::Triple::nvptx64)
+              TT = llvm::Triple("nvptx64-nvidia-cuda");
+            else if (TT.getArch() == llvm::Triple::amdgcn)
+              TT = llvm::Triple("amdgcn-amd-amdhsa");
+          }
 
           // Make sure we don't have a duplicate triple.
           auto Duplicate = FoundNormalizedTriples.find(NormalizedName);
@@ -3791,14 +3818,6 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
     }
   }
 
-  // FIXME: Linking separate translation units for SPIR-V is not supported yet.
-  // It can be done either by LLVM IR linking before conversion of the final
-  // linked module to SPIR-V or external SPIR-V linkers can be used e.g.
-  // spirv-link.
-  if (C.getDefaultToolChain().getTriple().isSPIRV() && Inputs.size() > 1) {
-    Diag(clang::diag::warn_drv_spirv_linking_multiple_inputs_unsupported);
-  }
-
   handleArguments(C, Args, Inputs, Actions);
 
   // Builder to be used to build offloading actions.
@@ -3838,15 +3857,8 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
       // Queue linker inputs.
       if (Phase == phases::Link) {
         assert(Phase == PL.back() && "linking must be final compilation step.");
-        // Compilation phases are setup per language, however for SPIR-V the
-        // final linking phase is meaningless since the compilation phase
-        // produces the final binary.
-        // FIXME: OpenCL - we could strip linking phase out from OpenCL
-        // compilation phases if we could verify it is not needed by any target.
-        if (!C.getDefaultToolChain().getTriple().isSPIRV()) {
-          LinkerInputs.push_back(Current);
-          Current = nullptr;
-        }
+        LinkerInputs.push_back(Current);
+        Current = nullptr;
         break;
       }
 
@@ -4059,7 +4071,8 @@ Action *Driver::ConstructPhaseAction(
         OutputTy = types::TY_ModuleFile;
     }
 
-    if (Args.hasArg(options::OPT_fsyntax_only)) {
+    if (Args.hasArg(options::OPT_fsyntax_only) ||
+        Args.hasArg(options::OPT_extract_api)) {
       // Syntax checks should not emit a PCH file
       OutputTy = types::TY_Nothing;
     }
@@ -4087,6 +4100,8 @@ Action *Driver::ConstructPhaseAction(
       return C.MakeAction<CompileJobAction>(Input, types::TY_ModuleFile);
     if (Args.hasArg(options::OPT_verify_pch))
       return C.MakeAction<VerifyPCHJobAction>(Input, types::TY_Nothing);
+    if (Args.hasArg(options::OPT_extract_api))
+      return C.MakeAction<CompileJobAction>(Input, types::TY_API_INFO);
     return C.MakeAction<CompileJobAction>(Input, types::TY_LLVM_BC);
   }
   case phases::Backend: {

@@ -3576,12 +3576,13 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
             }
           }
           ConsumedEnd = Tok.getLocation();
+          DS.setTypeofParensRange(Tracker.getRange());
           // Even if something went wrong above, continue as if we've seen
           // `decltype(auto)`.
           isInvalid = DS.SetTypeSpecType(TST_decltype_auto, Loc, PrevSpec,
                                          DiagID, TemplateId, Policy);
         } else {
-          isInvalid = DS.SetTypeSpecType(TST_auto, Loc, PrevSpec, DiagID,
+          isInvalid = DS.SetTypeSpecType(TST_auto, AutoLoc, PrevSpec, DiagID,
                                          TemplateId, Policy);
         }
         break;

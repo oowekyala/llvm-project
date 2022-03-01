@@ -6,11 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/TargetParser.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/AArch64TargetParser.h"
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/TargetParser.h"
 #include "gtest/gtest.h"
 #include <string>
 
@@ -686,13 +687,13 @@ TEST(TargetParserTest, ARMExtensionFeatures) {
     Features.clear();
     ARM::getExtensionFeatures(E.first, Features);
     EXPECT_TRUE(llvm::is_contained(Features, E.second.at(0)));
-    EXPECT_TRUE(Extensions.size() == Features.size());
+    EXPECT_EQ(Extensions.size(), Features.size());
 
     // test -extension
     Features.clear();
     ARM::getExtensionFeatures(~E.first, Features);
     EXPECT_TRUE(llvm::is_contained(Features, E.second.at(1)));
-    EXPECT_TRUE(Extensions.size() == Features.size());
+    EXPECT_EQ(Extensions.size(), Features.size());
   }
 }
 
@@ -700,10 +701,12 @@ TEST(TargetParserTest, ARMFPUFeatures) {
   std::vector<StringRef> Features;
   for (ARM::FPUKind FK = static_cast<ARM::FPUKind>(0);
        FK <= ARM::FPUKind::FK_LAST;
-       FK = static_cast<ARM::FPUKind>(static_cast<unsigned>(FK) + 1))
-    EXPECT_TRUE((FK == ARM::FK_INVALID || FK >= ARM::FK_LAST)
-                    ? !ARM::getFPUFeatures(FK, Features)
-                    : ARM::getFPUFeatures(FK, Features));
+       FK = static_cast<ARM::FPUKind>(static_cast<unsigned>(FK) + 1)) {
+    if (FK == ARM::FK_INVALID || FK >= ARM::FK_LAST)
+      EXPECT_FALSE(ARM::getFPUFeatures(FK, Features));
+    else
+      EXPECT_TRUE(ARM::getFPUFeatures(FK, Features));
+  }
 }
 
 TEST(TargetParserTest, ARMArchExtFeature) {
@@ -728,8 +731,7 @@ TEST(TargetParserTest, ARMArchExtFeature) {
                               {"sb", "nosb", "+sb", "-sb"},
                               {"i8mm", "noi8mm", "+i8mm", "-i8mm"},
                               {"mve", "nomve", "+mve", "-mve"},
-                              {"mve.fp", "nomve.fp", "+mve.fp", "-mve.fp"},
-                              {"pmuv3p4", "nopmuv3p4", "+perfmon", "-perfmon"}};
+                              {"mve.fp", "nomve.fp", "+mve.fp", "-mve.fp"}};
 
   for (unsigned i = 0; i < array_lengthof(ArchExt); i++) {
     EXPECT_EQ(StringRef(ArchExt[i][2]), ARM::getArchExtFeature(ArchExt[i][0]));
@@ -1448,7 +1450,7 @@ TEST(TargetParserTest, AArch64ExtensionFeatures) {
   EXPECT_TRUE(!Features.size());
 
   AArch64::getExtensionFeatures(ExtVal, Features);
-  EXPECT_TRUE(Extensions.size() == Features.size());
+  EXPECT_EQ(Extensions.size(), Features.size());
 
   EXPECT_TRUE(llvm::is_contained(Features, "+crc"));
   EXPECT_TRUE(llvm::is_contained(Features, "+crypto"));
@@ -1477,10 +1479,12 @@ TEST(TargetParserTest, AArch64ExtensionFeatures) {
 TEST(TargetParserTest, AArch64ArchFeatures) {
   std::vector<StringRef> Features;
 
-  for (auto AK : AArch64::ArchKinds)
-    EXPECT_TRUE((AK == AArch64::ArchKind::INVALID)
-                    ? !AArch64::getArchFeatures(AK, Features)
-                    : AArch64::getArchFeatures(AK, Features));
+  for (auto AK : AArch64::ArchKinds) {
+    if (AK == AArch64::ArchKind::INVALID)
+      EXPECT_FALSE(AArch64::getArchFeatures(AK, Features));
+    else
+      EXPECT_TRUE(AArch64::getArchFeatures(AK, Features));
+  }
 }
 
 TEST(TargetParserTest, AArch64ArchExtFeature) {
@@ -1517,7 +1521,9 @@ TEST(TargetParserTest, AArch64ArchExtFeature) {
       {"sme", "nosme", "+sme", "-sme"},
       {"sme-f64", "nosme-f64", "+sme-f64", "-sme-f64"},
       {"sme-i64", "nosme-i64", "+sme-i64", "-sme-i64"},
-      {"pmuv3p4", "nopmuv3p4", "+perfmon", "-perfmon"},
+      {"hbc", "nohbc", "+hbc", "-hbc"},
+      {"mops", "nomops", "+mops", "-mops"},
+      {"pmuv3", "nopmuv3", "+perfmon", "-perfmon"},
   };
 
   for (unsigned i = 0; i < array_lengthof(ArchExt); i++) {
