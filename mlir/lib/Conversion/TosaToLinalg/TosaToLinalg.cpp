@@ -45,480 +45,13 @@ static Value
 createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
                                             ArrayRef<Type> resultTypes,
                                             PatternRewriter &rewriter) {
-  Location loc = op->getLoc();
-  auto elementTy =
-      op->getOperand(0).getType().cast<ShapedType>().getElementType();
-
-  // tosa::AbsOp
-  if (isa<tosa::AbsOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<math::AbsFOp>(loc, resultTypes, args);
-
-  if (isa<tosa::AbsOp>(op) && elementTy.isa<IntegerType>()) {
-    auto zero = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getZeroAttr(elementTy));
-    auto cmp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
-                                              args[0], zero);
-    auto neg = rewriter.create<arith::SubIOp>(loc, zero, args[0]);
-    return rewriter.create<arith::SelectOp>(loc, cmp, args[0], neg);
-  }
-
-  // tosa::AddOp
-  if (isa<tosa::AddOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::AddFOp>(loc, resultTypes, args);
-
-  if (isa<tosa::AddOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::AddIOp>(loc, resultTypes, args);
-
-  // tosa::SubOp
-  if (isa<tosa::SubOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::SubFOp>(loc, resultTypes, args);
-
-  if (isa<tosa::SubOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::SubIOp>(loc, resultTypes, args);
-
-  // tosa::MulOp
-  if (isa<tosa::MulOp>(op) && elementTy.isa<FloatType>()) {
-    if (dyn_cast<tosa::MulOp>(op).getShift() != 0) {
-      (void)rewriter.notifyMatchFailure(op,
-                                        "Cannot have shift value for float");
-      return nullptr;
-    }
-    return rewriter.create<arith::MulFOp>(loc, resultTypes, args);
-  }
-
-  // tosa::DivOp
-  if (isa<tosa::DivOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
-
-  // tosa::ReciprocalOp
-  if (isa<tosa::ReciprocalOp>(op) && elementTy.isa<FloatType>()) {
-    auto one =
-        rewriter.create<arith::ConstantOp>(loc, FloatAttr::get(elementTy, 1));
-    return rewriter.create<arith::DivFOp>(loc, resultTypes, one, args[0]);
-  }
-
-  if (isa<tosa::MulOp>(op) && elementTy.isa<IntegerType>()) {
-    Value a = args[0];
-    Value b = args[1];
-    auto shift =
-        op->getAttr("shift").cast<IntegerAttr>().getValue().getSExtValue();
-    if (shift > 0) {
-      auto shiftConst =
-          rewriter.create<arith::ConstantIntOp>(loc, shift, /*bitwidth=*/8);
-      if (!a.getType().isInteger(32))
-        a = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), a);
-
-      if (!b.getType().isInteger(32))
-        b = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), b);
-
-      auto result = rewriter.create<tosa::ApplyScaleOp>(
-          loc, rewriter.getI32Type(), a, b, shiftConst,
-          rewriter.getBoolAttr(false));
-
-      if (elementTy.isInteger(32))
-        return result;
-
-      return rewriter.create<arith::TruncIOp>(loc, elementTy, result);
-    }
-
-    int aWidth = a.getType().getIntOrFloatBitWidth();
-    int bWidth = b.getType().getIntOrFloatBitWidth();
-    int cWidth = resultTypes[0].getIntOrFloatBitWidth();
-
-    if (aWidth < cWidth)
-      a = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], a);
-    if (bWidth < cWidth)
-      b = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], b);
-
-    return rewriter.create<arith::MulIOp>(loc, resultTypes, a, b);
-  }
-
-  // tosa::NegateOp
-  if (isa<tosa::NegateOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::NegFOp>(loc, resultTypes, args);
-
-  if (isa<tosa::NegateOp>(op) && elementTy.isa<IntegerType>() &&
-      !cast<tosa::NegateOp>(op).getQuantizationInfo()) {
-    auto constant =
-        rewriter.create<arith::ConstantOp>(loc, IntegerAttr::get(elementTy, 0));
-    return rewriter.create<arith::SubIOp>(loc, resultTypes, constant, args[0]);
-  }
-
-  if (isa<tosa::NegateOp>(op) && elementTy.isa<IntegerType>() &&
-      cast<tosa::NegateOp>(op).getQuantizationInfo()) {
-    auto quantizationInfo = cast<tosa::NegateOp>(op).getQuantizationInfo();
-    int32_t inputBitWidth = elementTy.getIntOrFloatBitWidth();
-    int64_t inZp = quantizationInfo.value().getInputZp();
-    int64_t outZp = quantizationInfo.value().getOutputZp();
-
-    // Compute the maximum value that can occur in the intermediate buffer.
-    int64_t zpAdd = inZp + outZp;
-    int64_t maxValue = APInt::getSignedMaxValue(inputBitWidth).getSExtValue() +
-                       std::abs(zpAdd) + 1;
-
-    // Convert that maximum value into the maximum bitwidth needed to represent
-    // it. We assume 48-bit numbers may be supported further in the pipeline.
-    int intermediateBitWidth = 64;
-    if (maxValue <= APInt::getSignedMaxValue(16).getSExtValue()) {
-      intermediateBitWidth = 16;
-    } else if (maxValue <= APInt::getSignedMaxValue(32).getSExtValue()) {
-      intermediateBitWidth = 32;
-    } else if (maxValue <= APInt::getSignedMaxValue(48).getSExtValue()) {
-      intermediateBitWidth = 48;
-    }
-
-    Type intermediateType = rewriter.getIntegerType(intermediateBitWidth);
-    Value zpAddValue = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getIntegerAttr(intermediateType, zpAdd));
-
-    // The negation can be applied by doing:
-    //  outputValue = inZp + outZp - inputValue
-    auto ext = rewriter.create<arith::ExtSIOp>(loc, intermediateType, args[0]);
-    auto sub = rewriter.create<arith::SubIOp>(loc, zpAddValue, ext);
-
-    // Clamp to the negation range.
-    Value min = rewriter.create<arith::ConstantIntOp>(
-        loc, APInt::getSignedMinValue(inputBitWidth).getSExtValue(),
-        intermediateType);
-    Value max = rewriter.create<arith::ConstantIntOp>(
-        loc, APInt::getSignedMaxValue(inputBitWidth).getSExtValue(),
-        intermediateType);
-    auto clamp = clampIntHelper(loc, sub, min, max, rewriter);
-
-    // Truncate to the final value.
-    return rewriter.create<arith::TruncIOp>(loc, elementTy, clamp);
-  }
-
-  // tosa::BitwiseAndOp
-  if (isa<tosa::BitwiseAndOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::AndIOp>(loc, resultTypes, args);
-
-  // tosa::BitwiseOrOp
-  if (isa<tosa::BitwiseOrOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::OrIOp>(loc, resultTypes, args);
-
-  // tosa::BitwiseNotOp
-  if (isa<tosa::BitwiseNotOp>(op) && elementTy.isa<IntegerType>()) {
-    auto allOnesAttr = rewriter.getIntegerAttr(
-        elementTy, APInt::getAllOnes(elementTy.getIntOrFloatBitWidth()));
-    auto allOnes = rewriter.create<arith::ConstantOp>(loc, allOnesAttr);
-    return rewriter.create<arith::XOrIOp>(loc, resultTypes, args[0], allOnes);
-  }
-
-  // tosa::BitwiseXOrOp
-  if (isa<tosa::BitwiseXorOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::XOrIOp>(loc, resultTypes, args);
-
-  // tosa::LogicalLeftShiftOp
-  if (isa<tosa::LogicalLeftShiftOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::ShLIOp>(loc, resultTypes, args);
-
-  // tosa::LogicalRightShiftOp
-  if (isa<tosa::LogicalRightShiftOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.create<arith::ShRUIOp>(loc, resultTypes, args);
-
-  // tosa::ArithmeticRightShiftOp
-  if (isa<tosa::ArithmeticRightShiftOp>(op) && elementTy.isa<IntegerType>()) {
-    auto result = rewriter.create<arith::ShRSIOp>(loc, resultTypes, args);
-    auto round = op->getAttr("round").cast<BoolAttr>().getValue();
-    if (!round) {
-      return result;
-    }
-
-    Type i1Ty = IntegerType::get(rewriter.getContext(), /*width=*/1);
-    auto one =
-        rewriter.create<arith::ConstantOp>(loc, IntegerAttr::get(elementTy, 1));
-    auto zero =
-        rewriter.create<arith::ConstantOp>(loc, IntegerAttr::get(elementTy, 0));
-    auto i1one =
-        rewriter.create<arith::ConstantOp>(loc, IntegerAttr::get(i1Ty, 1));
-
-    // Checking that input2 != 0
-    auto shiftValueGreaterThanZero = rewriter.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sgt, args[1], zero);
-
-    // Checking for the last bit of input1 to be 1
-    auto subtract =
-        rewriter.create<arith::SubIOp>(loc, resultTypes, args[1], one);
-    auto shifted =
-        rewriter.create<arith::ShRSIOp>(loc, resultTypes, args[0], subtract)
-            ->getResults();
-    auto truncated =
-        rewriter.create<arith::TruncIOp>(loc, i1Ty, shifted, std::nullopt);
-    auto isInputOdd =
-        rewriter.create<arith::AndIOp>(loc, i1Ty, truncated, i1one);
-
-    auto shouldRound = rewriter.create<arith::AndIOp>(
-        loc, i1Ty, shiftValueGreaterThanZero, isInputOdd);
-    auto extended =
-        rewriter.create<arith::ExtUIOp>(loc, resultTypes, shouldRound);
-    return rewriter.create<arith::AddIOp>(loc, resultTypes, result, extended);
-  }
-
-  // tosa::ClzOp
-  if (isa<tosa::ClzOp>(op) && elementTy.isa<IntegerType>()) {
-    return rewriter.create<math::CountLeadingZerosOp>(loc, elementTy, args[0]);
-  }
-
-  // tosa::LogicalAnd
-  if (isa<tosa::LogicalAndOp>(op) && elementTy.isInteger(1))
-    return rewriter.create<arith::AndIOp>(loc, resultTypes, args);
-
-  // tosa::LogicalNot
-  if (isa<tosa::LogicalNotOp>(op) && elementTy.isInteger(1)) {
-    auto one = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getIntegerAttr(elementTy, 1));
-    return rewriter.create<arith::XOrIOp>(loc, resultTypes, args[0], one);
-  }
-
-  // tosa::LogicalOr
-  if (isa<tosa::LogicalOrOp>(op) && elementTy.isInteger(1))
-    return rewriter.create<arith::OrIOp>(loc, resultTypes, args);
-
-  // tosa::LogicalXor
-  if (isa<tosa::LogicalXorOp>(op) && elementTy.isInteger(1))
-    return rewriter.create<arith::XOrIOp>(loc, resultTypes, args);
-
-  // tosa::PowOp
-  if (isa<tosa::PowOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<mlir::math::PowFOp>(loc, resultTypes, args);
-
-  // tosa::RsqrtOp
-  if (isa<tosa::RsqrtOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<mlir::math::RsqrtOp>(loc, resultTypes, args);
-
-  // tosa::LogOp
-  if (isa<tosa::LogOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<mlir::math::LogOp>(loc, resultTypes, args);
-
-  // tosa::ExpOp
-  if (isa<tosa::ExpOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<mlir::math::ExpOp>(loc, resultTypes, args);
-
-  // tosa::TanhOp
-  if (isa<tosa::TanhOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<mlir::math::TanhOp>(loc, resultTypes, args);
-
-  // tosa::GreaterOp
-  if (isa<tosa::GreaterOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OGT,
-                                          args[0], args[1]);
-
-  if (isa<tosa::GreaterOp>(op) && elementTy.isSignlessInteger())
-    return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
-                                          args[0], args[1]);
-
-  // tosa::GreaterEqualOp
-  if (isa<tosa::GreaterEqualOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OGE,
-                                          args[0], args[1]);
-
-  if (isa<tosa::GreaterEqualOp>(op) && elementTy.isSignlessInteger())
-    return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                          args[0], args[1]);
-
-  // tosa::EqualOp
-  if (isa<tosa::EqualOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OEQ,
-                                          args[0], args[1]);
-
-  if (isa<tosa::EqualOp>(op) && elementTy.isSignlessInteger())
-    return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                          args[0], args[1]);
-
-  // tosa::SelectOp
-  if (isa<tosa::SelectOp>(op)) {
-    elementTy = op->getOperand(1).getType().cast<ShapedType>().getElementType();
-    if (elementTy.isa<FloatType>() || elementTy.isa<IntegerType>())
-      return rewriter.create<arith::SelectOp>(loc, args[0], args[1], args[2]);
-  }
-
-  // tosa::MaximumOp
-  if (isa<tosa::MaximumOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<tosa::MaximumOp>(op) && elementTy.isSignlessInteger()) {
-    auto predicate = rewriter.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sgt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  // tosa::MinimumOp
-  if (isa<tosa::MinimumOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MinFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<tosa::MinimumOp>(op) && elementTy.isSignlessInteger()) {
-    auto predicate = rewriter.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  // tosa::CeilOp
-  if (isa<tosa::CeilOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<math::CeilOp>(loc, resultTypes, args);
-
-  // tosa::FloorOp
-  if (isa<tosa::FloorOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.create<math::FloorOp>(loc, resultTypes, args);
-
-  // tosa::ClampOp
-  if (isa<tosa::ClampOp>(op) && elementTy.isa<FloatType>()) {
-    bool losesInfo = false;
-    APFloat minApf = op->getAttr("min_fp").cast<FloatAttr>().getValue();
-    APFloat maxApf = op->getAttr("max_fp").cast<FloatAttr>().getValue();
-    minApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
-                   APFloat::rmNearestTiesToEven, &losesInfo);
-    maxApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
-                   APFloat::rmNearestTiesToEven, &losesInfo);
-    auto min = rewriter.create<arith::ConstantOp>(
-        loc, elementTy, rewriter.getFloatAttr(elementTy, minApf));
-    auto max = rewriter.create<arith::ConstantOp>(
-        loc, elementTy, rewriter.getFloatAttr(elementTy, maxApf));
-    return clampFloatHelper(loc, args[0], min, max, rewriter);
-  }
-
-  if (isa<tosa::ClampOp>(op) && elementTy.isa<IntegerType>()) {
-    auto intTy = elementTy.cast<IntegerType>();
-    int32_t min = static_cast<int32_t>(
-        op->getAttr("min_int").cast<IntegerAttr>().getValue().getSExtValue());
-    int32_t max = static_cast<int32_t>(
-        op->getAttr("max_int").cast<IntegerAttr>().getValue().getSExtValue());
-
-    if (intTy.isUnsignedInteger()) {
-      min = std::max<int32_t>(min, 0);
-      max = std::min<int32_t>(
-          max,
-          APInt::getMaxValue(intTy.getIntOrFloatBitWidth()).getSExtValue());
-    } else {
-      min = std::max<int32_t>(
-          min, APInt::getSignedMinValue(intTy.getIntOrFloatBitWidth())
-                   .getSExtValue());
-      max = std::min<int32_t>(
-          max, APInt::getSignedMaxValue(intTy.getIntOrFloatBitWidth())
-                   .getSExtValue());
-    }
-
-    auto minVal = rewriter.create<arith::ConstantIntOp>(
-        loc, min, intTy.getIntOrFloatBitWidth());
-    auto maxVal = rewriter.create<arith::ConstantIntOp>(
-        loc, max, intTy.getIntOrFloatBitWidth());
-    return clampIntHelper(loc, args[0], minVal, maxVal, rewriter);
-  }
-
-  // tosa::SigmoidOp
-  if (isa<tosa::SigmoidOp>(op) && elementTy.isa<FloatType>()) {
-    auto one =
-        rewriter.create<arith::ConstantOp>(loc, FloatAttr::get(elementTy, 1));
-    auto negate = rewriter.create<arith::NegFOp>(loc, resultTypes, args[0]);
-    auto exp = rewriter.create<mlir::math::ExpOp>(loc, resultTypes, negate);
-    auto added = rewriter.create<arith::AddFOp>(loc, resultTypes, exp, one);
-    return rewriter.create<arith::DivFOp>(loc, resultTypes, one, added);
-  }
-
-  // tosa::CastOp
-  if (isa<tosa::CastOp>(op)) {
-    Type srcTy = elementTy;
-    Type dstTy = resultTypes.front();
-    bool bitExtend =
-        srcTy.getIntOrFloatBitWidth() < dstTy.getIntOrFloatBitWidth();
-
-    if (srcTy == dstTy)
-      return args.front();
-
-    if (srcTy.isa<FloatType>() && dstTy.isa<FloatType>() && bitExtend)
-      return rewriter.create<arith::ExtFOp>(loc, resultTypes, args,
-                                            std::nullopt);
-
-    if (srcTy.isa<FloatType>() && dstTy.isa<FloatType>() && !bitExtend)
-      return rewriter.create<arith::TruncFOp>(loc, resultTypes, args,
-                                              std::nullopt);
-
-    // 1-bit integers need to be treated as signless.
-    if (srcTy.isInteger(1) && arith::UIToFPOp::areCastCompatible(srcTy, dstTy))
-      return rewriter.create<arith::UIToFPOp>(loc, resultTypes, args,
-                                              std::nullopt);
-
-    if (srcTy.isInteger(1) && dstTy.isa<IntegerType>() && bitExtend)
-      return rewriter.create<arith::ExtUIOp>(loc, resultTypes, args,
-                                             std::nullopt);
-
-    // Unsigned integers need an unrealized cast so that they can be passed
-    // to UIToFP.
-    if (srcTy.isUnsignedInteger() && dstTy.isa<FloatType>()) {
-      auto unrealizedCast =
-          rewriter
-              .create<UnrealizedConversionCastOp>(
-                  loc, rewriter.getIntegerType(srcTy.getIntOrFloatBitWidth()),
-                  args[0])
-              .getResult(0);
-      return rewriter.create<arith::UIToFPOp>(loc, resultTypes[0],
-                                              unrealizedCast);
-    }
-
-    // All other si-to-fp conversions should be handled by SIToFP.
-    if (arith::SIToFPOp::areCastCompatible(srcTy, dstTy))
-      return rewriter.create<arith::SIToFPOp>(loc, resultTypes, args,
-                                              std::nullopt);
-
-    // Casting to boolean, floats need to only be checked as not-equal to zero.
-    if (srcTy.isa<FloatType>() && dstTy.isInteger(1)) {
-      Value zero = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getFloatAttr(srcTy, 0.0));
-      return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::UNE,
-                                            args.front(), zero);
-    }
-
-    if (arith::FPToSIOp::areCastCompatible(srcTy, dstTy)) {
-      auto zero = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getF32FloatAttr(0.0f));
-      auto half = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getF32FloatAttr(0.5f));
-
-      auto intMin = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getF32FloatAttr(
-                   APInt::getSignedMinValue(dstTy.getIntOrFloatBitWidth())
-                       .getSExtValue()));
-
-      auto intMax = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getF32FloatAttr(
-                   APInt::getSignedMaxValue(dstTy.getIntOrFloatBitWidth())
-                       .getSExtValue()));
-
-      auto added = rewriter.create<arith::AddFOp>(loc, args[0], half);
-      auto subbed = rewriter.create<arith::SubFOp>(loc, args[0], half);
-      auto negative = rewriter.create<arith::CmpFOp>(
-          loc, arith::CmpFPredicate::OLT, args[0], zero);
-      auto rounded =
-          rewriter.create<arith::SelectOp>(loc, negative, subbed, added);
-
-      auto clamped = clampFloatHelper(loc, rounded, intMin, intMax, rewriter);
-
-      return rewriter.create<arith::FPToSIOp>(loc, dstTy, clamped);
-    }
-
-    // Casting to boolean, integers need to only be checked as not-equal to
-    // zero.
-    if (srcTy.isa<IntegerType>() && dstTy.isInteger(1)) {
-      Value zero = rewriter.create<arith::ConstantIntOp>(
-          loc, 0, srcTy.getIntOrFloatBitWidth());
-      return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                            args.front(), zero);
-    }
-
-    if (srcTy.isa<IntegerType>() && dstTy.isa<IntegerType>() && bitExtend)
-      return rewriter.create<arith::ExtSIOp>(loc, resultTypes, args,
-                                             std::nullopt);
-
-    if (srcTy.isa<IntegerType>() && dstTy.isa<IntegerType>() && !bitExtend) {
-      return rewriter.create<arith::TruncIOp>(loc, dstTy, args[0]);
-    }
-  }
-
-  (void)rewriter.notifyMatchFailure(
-      op, "unhandled op for linalg body calculation for elementwise op");
-  return nullptr;
+  auto elementTy = op->getOperand(0)
+                       .getType()
+                       .cast<ShapedType>()
+                       .getElementType()
+                       .cast<TosaStorageType>();
+
+  return elementTy.lowerTosaElementWiseOp(rewriter, op, args, resultTypes);
 }
 
 static LogicalResult
@@ -635,104 +168,30 @@ elementwiseMatchAndRewriteHelper(Operation *operation,
 
 // Returns the constant initial value for a given reduction operation. The
 // attribute type varies depending on the element type required.
-static Attribute createInitialValueForReduceOp(Operation *op, Type elementTy,
+static Attribute createInitialValueForReduceOp(Operation *op, Type elementType,
                                                PatternRewriter &rewriter) {
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.getFloatAttr(elementTy, 0.0);
+  auto elementTy = elementType.cast<TosaStorageType>();
 
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.getIntegerAttr(elementTy, 0);
+  if (isa<tosa::ReduceSumOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::ZERO);
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.getFloatAttr(elementTy, 1.0);
+  if (isa<tosa::ReduceProdOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::ONE);
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.getIntegerAttr(elementTy, 1);
+  if (isa<tosa::ReduceMinOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::RANGE_MAX);
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.getFloatAttr(
-        elementTy, APFloat::getLargest(
-                       elementTy.cast<FloatType>().getFloatSemantics(), false));
+  if (isa<tosa::ReduceMaxOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::RANGE_MIN);
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.getIntegerAttr(
-        elementTy, APInt::getSignedMaxValue(elementTy.getIntOrFloatBitWidth()));
+  if (isa<tosa::ReduceAllOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::ONE);
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.getFloatAttr(
-        elementTy, APFloat::getLargest(
-                       elementTy.cast<FloatType>().getFloatSemantics(), true));
+  if (isa<tosa::ReduceAnyOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::ZERO);
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.getIntegerAttr(
-        elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
-
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1))
-    return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
-
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1))
-    return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
-
-  if (isa<tosa::ArgMaxOp>(op) && elementTy.isa<FloatType>())
-    return rewriter.getFloatAttr(
-        elementTy, APFloat::getLargest(
-                       elementTy.cast<FloatType>().getFloatSemantics(), true));
-
-  if (isa<tosa::ArgMaxOp>(op) && elementTy.isa<IntegerType>())
-    return rewriter.getIntegerAttr(
-        elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
-
-  return {};
-}
-
-// Creates the body calculation for a reduction. The operations vary depending
-// on the input type.
-static Value createLinalgBodyCalculationForReduceOp(Operation *op,
-                                                    ValueRange args,
-                                                    Type elementTy,
-                                                    PatternRewriter &rewriter) {
-  Location loc = op->getLoc();
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::AddFOp>(loc, args);
-  }
-
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<IntegerType>()) {
-    return rewriter.create<arith::AddIOp>(loc, args);
-  }
-
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MulFOp>(loc, args);
-  }
-
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<IntegerType>()) {
-    return rewriter.create<arith::MulIOp>(loc, args);
-  }
-
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MinFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<IntegerType>()) {
-    auto predicate = rewriter.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
-  }
-
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<IntegerType>()) {
-    auto predicate = rewriter.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sgt, args[0], args[1]);
-    return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
-  }
-
-  if (isa<tosa::ReduceAllOp>(op) && elementTy.isInteger(1))
-    return rewriter.create<arith::AndIOp>(loc, args);
-
-  if (isa<tosa::ReduceAnyOp>(op) && elementTy.isInteger(1))
-    return rewriter.create<arith::OrIOp>(loc, args);
+  if (isa<tosa::ArgMaxOp>(op))
+    return elementTy.materializeAttribute(rewriter, SpecialValueId::RANGE_MIN);
 
   return {};
 }
@@ -745,7 +204,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, uint64_t axis,
   auto loc = op->getLoc();
   auto inputTy = op->getOperand(0).getType().template cast<ShapedType>();
   auto resultTy = op->getResult(0).getType().template cast<ShapedType>();
-  auto elementTy = resultTy.getElementType();
+  auto elementTy = resultTy.getElementType().cast<TosaStorageType>();
   Value input = op->getOperand(0);
 
   llvm::SmallVector<int64_t> reduceShape;
@@ -772,7 +231,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, uint64_t axis,
     return rewriter.notifyMatchFailure(
         op, "No initial value found for reduction operation");
 
-  auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
+  auto fillValue = elementTy.materializeConstant(rewriter, loc, fillValueAttr);
   auto filledTensor = rewriter
                           .create<linalg::FillOp>(loc, ValueRange{fillValue},
                                                   ValueRange{emptyTensor})
@@ -795,15 +254,18 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, uint64_t axis,
   auto linalgOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, input, filledTensor, maps, iteratorTypes,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
-        auto result = createLinalgBodyCalculationForReduceOp(
-            op, blockArgs, elementTy, rewriter);
-        if (result)
+        auto result =
+            elementTy.lowerTosaReductionKernel(rewriter, op, blockArgs);
+
+        if (!result) {
           didEncounterError = true;
+          return;
+        }
 
         nestedBuilder.create<linalg::YieldOp>(loc, result);
       });
 
-  if (!didEncounterError)
+  if (didEncounterError)
     return rewriter.notifyMatchFailure(
         op, "unable to create linalg.generic body for reduce op");
 
@@ -1995,12 +1457,12 @@ public:
     Value input = argmaxOp.getInput();
     auto inputTy = input.getType().cast<ShapedType>();
     auto resultTy = argmaxOp.getOutput().getType().cast<ShapedType>();
-    auto inElementTy = inputTy.getElementType();
-    auto outElementTy = resultTy.getElementType();
+    auto inElementTy = inputTy.getElementType().cast<TosaStorageType>();
+    auto outElementTy = resultTy.getElementType().cast<TosaStorageType>();
     int axis = argmaxOp.getAxis();
     auto resultMaxTy = RankedTensorType::get(resultTy.getShape(), inElementTy);
 
-    if (!outElementTy.isa<IntegerType>())
+    if (!outElementTy.isIntegral())
       return rewriter.notifyMatchFailure(
           argmaxOp,
           "tosa.arg_max to linalg.* requires integer-like result type");
@@ -2017,8 +1479,8 @@ public:
                               .create<tensor::EmptyOp>(loc, resultTy.getShape(),
                                                        outElementTy, dynDims)
                               .getResult();
-    auto fillValueIdx = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getIntegerAttr(outElementTy, 0));
+    auto fillValueIdx = outElementTy.materializeSpecialValue(
+        rewriter, loc, SpecialValueId::ZERO);
     auto filledTensorIdx =
         rewriter
             .create<linalg::FillOp>(loc, ValueRange{fillValueIdx},
@@ -2038,7 +1500,7 @@ public:
           argmaxOp, "unsupported tosa.argmax element type");
 
     auto fillValueMax =
-        rewriter.create<arith::ConstantOp>(loc, fillValueMaxAttr);
+        inElementTy.materializeConstant(rewriter, loc, fillValueMaxAttr);
     auto filledTensorMax =
         rewriter
             .create<linalg::FillOp>(loc, ValueRange{fillValueMax},
@@ -2075,10 +1537,11 @@ public:
               rewriter.create<linalg::IndexOp>(loc, axis));
 
           Value predicate;
-          if (inElementTy.isa<FloatType>()) {
+          // todo should this be abstracted away
+          if (inElementTy.isFloatingPoint()) {
             predicate = rewriter.create<arith::CmpFOp>(
                 nestedLoc, arith::CmpFPredicate::OGT, newValue, oldValue);
-          } else if (inElementTy.isa<IntegerType>()) {
+          } else if (inElementTy.isIntegral()) {
             predicate = rewriter.create<arith::CmpIOp>(
                 nestedLoc, arith::CmpIPredicate::sgt, newValue, oldValue);
           } else {

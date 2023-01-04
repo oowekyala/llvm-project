@@ -81,7 +81,7 @@ static mlir::Value getConvOutputDim(Location loc, Value inputDim,
                                     OpBuilder &rewriter) {
   ImplicitLocOpBuilder builder(loc, rewriter);
   auto one = rewriter.create<arith::ConstantOp>(
-      loc, IntegerAttr::get(inputDim.getType(), 1));
+      loc, IntegerAttr::get(inputDim.getType(), 1)); // todo
   Value padBefore = reifyConstantDim(padBeforeAttr, builder);
   Value paddedBefore = builder.create<arith::AddIOp>(inputDim, padBefore);
   Value padAfter = reifyConstantDim(padAfterAttr, builder);
@@ -172,8 +172,8 @@ public:
     ShapedType resultTy =
         op->getResult(0).getType().template cast<ShapedType>();
 
-    Type inputETy = inputTy.getElementType();
-    Type resultETy = resultTy.getElementType();
+    auto inputETy = inputTy.getElementType().cast<TosaStorageType>();
+    auto resultETy = resultTy.getElementType().cast<TosaStorageType>();
 
     DenseI64ArrayAttr padAttr = op.getPadAttr();
     DenseI64ArrayAttr strideTosaAttr = op.getStrideAttr();
@@ -206,20 +206,14 @@ public:
     Attribute zeroAttr = rewriter.getZeroAttr(inputETy);
     if (isQuantized) {
       auto quantizationInfo = *op.getQuantizationInfo();
-      int64_t iZp = quantizationInfo.getInputZp();
+      auto zerop = inputETy.fitIntoAttributeOrFail(
+          rewriter, quantizationInfo.getInputZp());
 
-      int64_t intMin =
-          APInt::getSignedMinValue(inputETy.getIntOrFloatBitWidth())
-              .getSExtValue();
-      int64_t intMax =
-          APInt::getSignedMaxValue(inputETy.getIntOrFloatBitWidth())
-              .getSExtValue();
-
-      if (iZp < intMin || iZp > intMax)
+      if (!zerop)
         return rewriter.notifyMatchFailure(
             op, "tosa.conv op quantization has zp outside of input range");
 
-      zeroAttr = rewriter.getIntegerAttr(inputETy, iZp);
+      zeroAttr = *zerop;
     }
 
     llvm::SmallVector<int64_t> pad;
@@ -248,10 +242,10 @@ public:
     weight = rewriter.create<tosa::TransposeOp>(loc, newWeightTy, weight,
                                                 weightPermValue);
 
-    Attribute resultZeroAttr = rewriter.getZeroAttr(resultETy);
+    Attribute resultZeroAttr = resultETy.materializeAttribute(rewriter, SpecialValueId::ZERO);
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
-    Value zero = rewriter.create<arith::ConstantOp>(loc, resultZeroAttr);
+    Value zero = resultETy.materializeConstant(rewriter, loc, resultZeroAttr);
     Value zeroTensor = rewriter
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})
@@ -507,7 +501,7 @@ public:
     Location loc = op.getLoc();
 
     auto outputTy = op.getType().cast<ShapedType>();
-    auto outputElementTy = outputTy.getElementType();
+    auto outputElementTy = outputTy.getElementType().cast<TosaStorageType>();
 
     auto firstOperandTy = op->getOperand(0).getType().cast<ShapedType>();
     auto secondOperandTy = op->getOperand(1).getType().cast<ShapedType>();
@@ -529,8 +523,7 @@ public:
 
     SmallVector<Value> filteredDims = condenseValues(dynDims);
 
-    auto zeroAttr = rewriter.getZeroAttr(outputElementTy);
-    Value zero = rewriter.create<arith::ConstantOp>(loc, zeroAttr);
+    Value zero = outputElementTy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
     Value zeroTensor = rewriter
@@ -575,7 +568,7 @@ public:
     auto weightTy = weight.getType().cast<ShapedType>();
     auto weightShape = weightTy.getShape();
 
-    auto outputETy = outputTy.getElementType();
+    auto outputETy = outputTy.getElementType().cast<TosaStorageType>();
 
     SmallVector<Value> dynDims;
     dynDims.resize(op->getResult(0).getType().cast<ShapedType>().getRank());
@@ -605,8 +598,7 @@ public:
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
 
     // When quantized, the input elemeny type is not the same as the output
-    Attribute resultZeroAttr = rewriter.getZeroAttr(outputETy);
-    Value zero = rewriter.create<arith::ConstantOp>(loc, resultZeroAttr);
+    Value zero = outputETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     Value zeroTensor = rewriter
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})
@@ -693,7 +685,7 @@ public:
     ShapedType inputTy = input.getType().cast<ShapedType>();
 
     ShapedType resultTy = op.getType().template cast<ShapedType>();
-    Type resultETy = inputTy.getElementType();
+    auto resultETy = inputTy.getElementType().cast<TosaStorageType>();
 
     auto dynamicDimsOr =
         checkHasDynamicBatchDims(rewriter, op, {input, op.getOutput()});
@@ -702,21 +694,7 @@ public:
     SmallVector<Value> dynamicDims = *dynamicDimsOr;
 
     // Determine what the initial value needs to be for the max pool op.
-    Attribute initialAttr;
-    if (resultETy.isF32())
-      initialAttr = rewriter.getFloatAttr(
-          resultETy,
-          APFloat::getLargest(resultETy.cast<FloatType>().getFloatSemantics(),
-                              true));
-
-    if (resultETy.isa<IntegerType>())
-      initialAttr = rewriter.getIntegerAttr(
-          resultETy,
-          APInt::getSignedMinValue(resultETy.getIntOrFloatBitWidth()));
-
-    if (!initialAttr)
-      return rewriter.notifyMatchFailure(
-          op, "Unsupported initial value for tosa.maxpool_2d op");
+    Attribute initialAttr = resultETy.materializeAttribute(rewriter, SpecialValueId::RANGE_MIN);
 
     // Apply padding as necessary.
     llvm::SmallVector<int64_t> pad;
@@ -725,7 +703,7 @@ public:
     pad.resize(pad.size() + 2, 0);
     Value paddedInput = applyPad(loc, input, pad, initialAttr, rewriter);
 
-    Value initialValue = rewriter.create<arith::ConstantOp>(loc, initialAttr);
+    Value initialValue = resultETy.materializeConstant(rewriter, loc, initialAttr);
 
     ArrayRef<int64_t> kernel = op.getKernel();
     ArrayRef<int64_t> stride = op.getStride();

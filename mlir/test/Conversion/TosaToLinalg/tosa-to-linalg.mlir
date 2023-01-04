@@ -428,8 +428,8 @@ func.func @test_simple_i32(%arg0: tensor<1xi32>) -> () {
 
 // -----
 
-// CHECK-LABEL: @test_simple_ui8
-func.func @test_simple_ui8(%arg0: tensor<1xi8>) -> () {
+// CHECK-LABEL: @test_simple_i8
+func.func @test_simple_i8(%arg0: tensor<1xi8>) -> () {
 
   // CHECK: linalg.generic
   // CHECK: sitofp

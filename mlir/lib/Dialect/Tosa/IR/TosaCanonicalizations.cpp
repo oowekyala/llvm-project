@@ -344,14 +344,14 @@ struct MaterializePadValue : public OpRewritePattern<tosa::PadOp> {
     auto padding = op.getPadding();
 
     ShapedType inputTy = input.getType().cast<ShapedType>();
-    Type elementTy = inputTy.getElementType();
+    auto elementTy = inputTy.getElementType().cast<TosaStorageType>();
 
     Attribute constantAttr;
-    if (elementTy.isa<FloatType>()) {
+    if (elementTy.isFloatingPoint()) {
       constantAttr = rewriter.getFloatAttr(elementTy, 0.0);
-    } else if (elementTy.isa<IntegerType>() && !op.getQuantizationInfo()) {
+    } else if (elementTy.isIntegral() && !op.getQuantizationInfo()) {
       constantAttr = rewriter.getIntegerAttr(elementTy, 0);
-    } else if (elementTy.isa<IntegerType>() && op.getQuantizationInfo()) {
+    } else if (elementTy.isIntegral() && op.getQuantizationInfo()) {
       auto value = op.getQuantizationInfo()->getInputZp();
       constantAttr = rewriter.getIntegerAttr(elementTy, value);
     }
@@ -422,13 +422,13 @@ struct ClampIsNoOp : public OpRewritePattern<tosa::ClampOp> {
     Value input = op.getInput();
     auto inputType =
         op.getInput().getType().template dyn_cast<RankedTensorType>();
-    auto inputElementType = inputType.getElementType();
+    auto inputETy = inputType.getElementType().cast<TosaStorageType>();
 
     if (!inputType.hasStaticShape()) {
       return failure();
     }
 
-    if (inputElementType.isF32()) {
+    if (inputETy.isFloatingPoint() && inputETy.getWidth() == 32) {
       auto minClamp = op.getMinFp();
       auto maxClamp = op.getMaxFp();
       bool isMin = (minClamp.isLargest() || minClamp.isInfinity()) &&
@@ -443,35 +443,19 @@ struct ClampIsNoOp : public OpRewritePattern<tosa::ClampOp> {
       return failure();
     }
 
-    if (inputElementType.isUnsignedInteger()) {
+    if (inputETy.isIntegral()) {
       int64_t minClamp = op.getMinInt();
       int64_t maxClamp = op.getMaxInt();
 
-      int64_t intMin =
-          APInt::getMinValue(inputElementType.getIntOrFloatBitWidth())
-              .getZExtValue();
-      int64_t intMax =
-          APInt::getMaxValue(inputElementType.getIntOrFloatBitWidth())
-              .getZExtValue();
-
-      if (minClamp <= intMin && maxClamp >= intMax) {
-        rewriter.replaceOp(op, input);
-        return success();
+      int64_t intMin;
+      int64_t intMax;
+      if (inputETy.isUnsigned()) {
+        intMin = APInt::getMinValue(inputETy.getWidth()).getZExtValue();
+        intMax = APInt::getMaxValue(inputETy.getWidth()).getZExtValue();
+      } else {
+        intMin = APInt::getSignedMinValue(inputETy.getWidth()).getSExtValue();
+        intMax = APInt::getSignedMaxValue(inputETy.getWidth()).getSExtValue();
       }
-      return failure();
-    }
-
-    if (inputElementType.isa<IntegerType>()) {
-      int64_t minClamp = op.getMinInt();
-      int64_t maxClamp = op.getMaxInt();
-
-      int64_t intMin =
-          APInt::getSignedMinValue(inputElementType.getIntOrFloatBitWidth())
-              .getSExtValue();
-      int64_t intMax =
-          APInt::getSignedMaxValue(inputElementType.getIntOrFloatBitWidth())
-              .getSExtValue();
-
       if (minClamp <= intMin && maxClamp >= intMax) {
         rewriter.replaceOp(op, input);
         return success();

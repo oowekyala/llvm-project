@@ -36,6 +36,7 @@ using namespace mlir::tosa;
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Tosa/IR/TosaInterfaces.cpp.inc"
+#include "mlir/Dialect/Tosa/IR/TosaStorageTypeInterfaceImpl.h"
 
 namespace {
 //===----------------------------------------------------------------------===//
@@ -84,6 +85,7 @@ void TosaDialect::initialize() {
 #include "mlir/Dialect/Tosa/IR/TosaAttributes.cpp.inc"
       >();
   addInterfaces<TosaInlinerInterface>();
+  registerStorageTypeInterfaceImpls(getContext());
 }
 
 Operation *TosaDialect::materializeConstant(OpBuilder &builder, Attribute value,
@@ -152,11 +154,13 @@ LogicalResult tosa::AvgPool2dOp::verify() {
   if (auto quantType = resultETy.dyn_cast<mlir::quant::UniformQuantizedType>())
     resultETy = quantType.getStorageType();
 
-  if (inputETy.isF32() && resultETy.isF32())
-    return success();
-  if (inputETy.isInteger(8) && resultETy.isInteger(8))
-    return success();
-  if (inputETy.isInteger(16) && resultETy.isInteger(16))
+  auto inputEty2 = inputETy.dyn_cast<TosaStorageType>();
+  auto resultEty2 = resultETy.dyn_cast<TosaStorageType>();
+
+  if (!inputEty2 || !resultEty2)
+    return emitOpError("input/output element types should implement TosaStorageType.");
+  
+  if (inputEty2 == resultEty2)
     return success();
 
   return emitOpError("input/output element types are incompatible.");
