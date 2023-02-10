@@ -47,12 +47,22 @@ struct IntegerStorageTypeItf
     APInt v;
     if (value == SpecialValueId::ZERO)
       v = APInt(getWidth(t), 0, isSigned(t));
+
     else if (value == SpecialValueId::ONE)
       v = APInt(getWidth(t), 1, isSigned(t));
+
     else if (value == SpecialValueId::RANGE_MIN)
-      v = APInt::getSignedMinValue(getWidth(t));
+      if (isUnsigned(t))
+        v = APInt::getMinValue(getWidth(t));
+      else
+        v = APInt::getSignedMinValue(getWidth(t));
+
     else if (value == SpecialValueId::RANGE_MAX)
-      v = APInt::getSignedMaxValue(getWidth(t));
+      if (isUnsigned(t))
+        v = APInt::getMaxValue(getWidth(t));
+      else
+        v = APInt::getSignedMaxValue(getWidth(t));
+
     else if (value == SpecialValueId::ALL_ONES)
       v = APInt::getAllOnes(getWidth(t));
 
@@ -69,74 +79,6 @@ struct IntegerStorageTypeItf
                                ArrayRef<Type> resultTypes) const {
     return lowerTosaToLinalgElementWiseOpDefault(elementTy, rewriter, op, args,
                                                  resultTypes);
-  }
-
-  Value lowerMulOp(Type elementTy, PatternRewriter &rewriter, Operation *op,
-                   ValueRange args, ArrayRef<Type> resultTypes) const {
-    auto loc = op->getLoc();
-    Value a = args[0];
-    Value b = args[1];
-    auto shift =
-        op->getAttr("shift").cast<IntegerAttr>().getValue().getSExtValue();
-    if (shift > 0) {
-      auto shiftConst =
-          rewriter.create<arith::ConstantIntOp>(loc, shift, /*bitwidth=*/8);
-      if (!a.getType().isInteger(32))
-        a = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), a);
-
-      if (!b.getType().isInteger(32))
-        b = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), b);
-
-      auto result = rewriter.create<tosa::ApplyScaleOp>(
-          loc, rewriter.getI32Type(), a, b, shiftConst,
-          rewriter.getBoolAttr(false));
-
-      if (elementTy.isInteger(32))
-        return result;
-
-      return rewriter.create<arith::TruncIOp>(loc, elementTy, result);
-    }
-
-    int aWidth = a.getType().cast<TosaStorageType>().getWidth();
-    int bWidth = b.getType().cast<TosaStorageType>().getWidth();
-    int cWidth = resultTypes[0].cast<TosaStorageType>().getWidth();
-
-    if (aWidth < cWidth)
-      a = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], a);
-    if (bWidth < cWidth)
-      b = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], b);
-
-    return rewriter.create<arith::MulIOp>(loc, resultTypes, a, b);
-  }
-
-  Value lowerClampOp(Type elementTy, PatternRewriter &rewriter, Operation *op,
-                     ValueRange args, ArrayRef<Type> resultTypes) const {
-    auto loc = op->getLoc();
-    auto intTy = elementTy.cast<IntegerType>();
-    int32_t min = static_cast<int32_t>(
-        op->getAttr("min_int").cast<IntegerAttr>().getValue().getSExtValue());
-    int32_t max = static_cast<int32_t>(
-        op->getAttr("max_int").cast<IntegerAttr>().getValue().getSExtValue());
-
-    if (intTy.isUnsignedInteger()) {
-      min = std::max<int32_t>(min, 0);
-      max = std::min<int32_t>(
-          max,
-          APInt::getMaxValue(intTy.getIntOrFloatBitWidth()).getSExtValue());
-    } else {
-      min = std::max<int32_t>(
-          min, APInt::getSignedMinValue(intTy.getIntOrFloatBitWidth())
-                   .getSExtValue());
-      max = std::min<int32_t>(
-          max, APInt::getSignedMaxValue(intTy.getIntOrFloatBitWidth())
-                   .getSExtValue());
-    }
-
-    auto minVal = rewriter.create<arith::ConstantIntOp>(
-        loc, min, intTy.getIntOrFloatBitWidth());
-    auto maxVal = rewriter.create<arith::ConstantIntOp>(
-        loc, max, intTy.getIntOrFloatBitWidth());
-    return clampIntHelper(loc, args[0], minVal, maxVal, rewriter);
   }
 
   Value lowerTosaReductionKernel(Type t, PatternRewriter &rewriter,
@@ -214,34 +156,6 @@ struct FloatStorageTypeItf
                                                  resultTypes);
   }
 
-  Value lowerMulOp(Type elementTy, PatternRewriter &rewriter, Operation *op,
-                   ValueRange args, ArrayRef<Type> resultTypes) const {
-    auto loc = op->getLoc();
-    if (dyn_cast<tosa::MulOp>(op).getShift() != 0) {
-      (void)rewriter.notifyMatchFailure(op,
-                                        "Cannot have shift value for float");
-      return nullptr;
-    }
-    return rewriter.create<arith::MulFOp>(loc, resultTypes, args);
-  }
-
-  Value lowerClampOp(Type elementTy, PatternRewriter &rewriter, Operation *op,
-                     ValueRange args, ArrayRef<Type> resultTypes) const {
-    auto loc = op->getLoc();
-    bool losesInfo = false;
-    APFloat minApf = op->getAttr("min_fp").cast<FloatAttr>().getValue();
-    APFloat maxApf = op->getAttr("max_fp").cast<FloatAttr>().getValue();
-    minApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
-                   APFloat::rmNearestTiesToEven, &losesInfo);
-    maxApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
-                   APFloat::rmNearestTiesToEven, &losesInfo);
-    auto min = rewriter.create<arith::ConstantOp>(
-        loc, elementTy, rewriter.getFloatAttr(elementTy, minApf));
-    auto max = rewriter.create<arith::ConstantOp>(
-        loc, elementTy, rewriter.getFloatAttr(elementTy, maxApf));
-    return clampFloatHelper(loc, args[0], min, max, rewriter);
-  }
-
   Value lowerTosaReductionKernel(Type t, PatternRewriter &rewriter,
                                  Operation *op, ValueRange args) const {
     Location loc = op->getLoc();
@@ -295,7 +209,50 @@ Value lowerTosaToLinalgElementWiseOpDefault(Type elementType0,
 
   // tosa::MulOp
   if (isa<tosa::MulOp>(op)) {
-    return elementTy.lowerMulOp(rewriter, op, args, resultTypes);
+    if (elementTy.isFloatingPoint()) {
+      if (dyn_cast<tosa::MulOp>(op).getShift() != 0) {
+        (void)rewriter.notifyMatchFailure(op,
+                                          "Cannot have shift value for float");
+        return nullptr;
+      }
+      return rewriter.create<arith::MulFOp>(loc, resultTypes, args);
+
+    } else if (elementTy.isIntegral()) {
+
+      Value a = args[0];
+      Value b = args[1];
+      auto shift =
+          op->getAttr("shift").cast<IntegerAttr>().getValue().getSExtValue();
+      if (shift > 0) {
+        auto shiftConst =
+            rewriter.create<arith::ConstantIntOp>(loc, shift, /*bitwidth=*/8);
+        if (!a.getType().isInteger(32))
+          a = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), a);
+
+        if (!b.getType().isInteger(32))
+          b = rewriter.create<arith::ExtSIOp>(loc, rewriter.getI32Type(), b);
+
+        auto result = rewriter.create<tosa::ApplyScaleOp>(
+            loc, rewriter.getI32Type(), a, b, shiftConst,
+            rewriter.getBoolAttr(false));
+
+        if (elementTy.isInteger(32))
+          return result;
+
+        return rewriter.create<arith::TruncIOp>(loc, elementTy, result);
+      }
+
+      int aWidth = a.getType().cast<TosaStorageType>().getWidth();
+      int bWidth = b.getType().cast<TosaStorageType>().getWidth();
+      int cWidth = resultTypes[0].cast<TosaStorageType>().getWidth();
+
+      if (aWidth < cWidth)
+        a = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], a);
+      if (bWidth < cWidth)
+        b = rewriter.create<arith::ExtSIOp>(loc, resultTypes[0], b);
+
+      return rewriter.create<arith::MulIOp>(loc, resultTypes, a, b);
+    }
   }
 
   // tosa::DivOp
@@ -545,7 +502,48 @@ Value lowerTosaToLinalgElementWiseOpDefault(Type elementType0,
 
   // tosa::ClampOp
   if (isa<tosa::ClampOp>(op)) {
-    return elementTy.lowerClampOp(rewriter, op, args, resultTypes);
+    if (elementTy.isFloatingPoint()) {
+      bool losesInfo = false;
+      APFloat minApf = op->getAttr("min_fp").cast<FloatAttr>().getValue();
+      APFloat maxApf = op->getAttr("max_fp").cast<FloatAttr>().getValue();
+      minApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
+                     APFloat::rmNearestTiesToEven, &losesInfo);
+      maxApf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
+                     APFloat::rmNearestTiesToEven, &losesInfo);
+      auto min = elementTy.materializeConstant(
+          rewriter, loc, rewriter.getFloatAttr(elementTy, minApf));
+      auto max = elementTy.materializeConstant(
+          rewriter, loc, rewriter.getFloatAttr(elementTy, maxApf));
+
+      return clampFloatHelper(loc, args[0], min, max, rewriter);
+
+    } else if (elementTy.isIntegral()) {
+
+      int32_t min = static_cast<int32_t>(
+          op->getAttr("min_int").cast<IntegerAttr>().getValue().getSExtValue());
+      int32_t max = static_cast<int32_t>(
+          op->getAttr("max_int").cast<IntegerAttr>().getValue().getSExtValue());
+
+      if (elementTy.isUnsignedInteger()) {
+        min = std::max<int32_t>(min, 0);
+        max = std::min<int32_t>(
+            max,
+            APInt::getMaxValue(elementTy.getWidth()).getSExtValue());
+      } else {
+        min = std::max<int32_t>(
+            min, APInt::getSignedMinValue(elementTy.getWidth())
+                     .getSExtValue());
+        max = std::min<int32_t>(
+            max, APInt::getSignedMaxValue(elementTy.getWidth())
+                     .getSExtValue());
+      }
+
+      auto minVal = rewriter.create<arith::ConstantIntOp>(
+          loc, min, elementTy.getWidth());
+      auto maxVal = rewriter.create<arith::ConstantIntOp>(
+          loc, max, elementTy.getWidth());
+      return clampIntHelper(loc, args[0], minVal, maxVal, rewriter);
+    }
   }
 
   // tosa::SigmoidOp

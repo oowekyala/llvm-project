@@ -92,19 +92,6 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
                       "::llvm::ArrayRef<::mlir::Type>":$resultTypes
                  )
       >,
-
-      InterfaceMethod<
-        /*desc=*/[{
-          Create a DAG that performs the given operation in the lower-level dialect, eg arith.
-        }],
-        /*retType=*/"::mlir::Value",
-        /*methodName=*/"lowerClampOp",
-        /*args=*/(ins "::mlir::PatternRewriter&":$rewriter, 
-                      "::mlir::Operation*":$op,
-                      "::mlir::ValueRange":$args,
-                      "::llvm::ArrayRef<::mlir::Type>":$resultTypes
-                 )
-      >,
       InterfaceMethod<
         /*desc=*/[{
           Create a DAG that performs the given operation in the lower-level dialect, eg arith.
@@ -114,18 +101,6 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
         /*args=*/(ins "::mlir::PatternRewriter&":$rewriter, 
                       "::mlir::Operation*":$op,
                       "::mlir::ValueRange":$args
-                 )
-      >,
-      InterfaceMethod<
-        /*desc=*/[{
-          Create a DAG that performs the given operation in the lower-level dialect, eg arith.
-        }],
-        /*retType=*/"::mlir::Value",
-        /*methodName=*/"lowerMulOp",
-        /*args=*/(ins "::mlir::PatternRewriter&":$rewriter, 
-                      "::mlir::Operation*":$op,
-                      "::mlir::ValueRange":$args,
-                      "::llvm::ArrayRef<::mlir::Type>":$resultTypes
                  )
       >
   ];
