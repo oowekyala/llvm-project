@@ -101,7 +101,15 @@ Operation *TosaDialect::materializeConstant(OpBuilder &builder, Attribute value,
 // TOSA Operator Verifiers.
 //===----------------------------------------------------------------------===//
 
-template <typename T> static LogicalResult verifyConvOp(T op) {
+bool isQuantized(Type t) {
+  if (auto asTosaStorage = t.dyn_cast<TosaStorageType>()) {
+    return asTosaStorage.isIntegral();
+  }
+  return t.isa<quant::QuantizedType>();
+}
+
+template <typename T>
+static LogicalResult verifyConvOp(T op) {
   // All TOSA conv ops have an input() and weight().
   auto inputType =
       op.getInput().getType().template dyn_cast<RankedTensorType>();
@@ -121,8 +129,8 @@ template <typename T> static LogicalResult verifyConvOp(T op) {
   auto inputEType = inputType.getElementType();
   auto weightEType = weightType.getElementType();
 
-  bool inputIsQuant = !inputEType.template isa<FloatType>();
-  bool weightIsQuant = !weightEType.template isa<FloatType>();
+  bool inputIsQuant = isQuantized(inputEType);
+  bool weightIsQuant = isQuantized(weightEType);
 
   // Either both must be quantized or both unquantized.
   if (inputIsQuant != weightIsQuant) {
@@ -158,8 +166,9 @@ LogicalResult tosa::AvgPool2dOp::verify() {
   auto resultEty2 = resultETy.dyn_cast<TosaStorageType>();
 
   if (!inputEty2 || !resultEty2)
-    return emitOpError("input/output element types should implement TosaStorageType.");
-  
+    return emitOpError(
+        "input/output element types should implement TosaStorageType.");
+
   if (inputEty2 == resultEty2)
     return success();
 

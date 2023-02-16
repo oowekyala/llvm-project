@@ -341,8 +341,8 @@ public:
     ShapedType resultTy = op->getResult(0).getType().cast<ShapedType>();
     int64_t resultRank = resultTy.getRank();
 
-    Type inputETy = inputTy.getElementType();
-    Type resultETy = resultTy.getElementType();
+    auto inputETy = inputTy.getElementType().cast<TosaStorageType>();
+    auto resultETy = resultTy.getElementType().cast<TosaStorageType>();
 
     auto padAttr = op->getAttr("pad").cast<DenseI64ArrayAttr>();
     auto strideTosaAttr = op->getAttr("stride").cast<DenseI64ArrayAttr>();
@@ -421,10 +421,9 @@ public:
     indexingMaps.push_back(rewriter.getMultiDimIdentityMap(resultRank));
     indexingMaps.push_back(rewriter.getMultiDimIdentityMap(resultRank));
 
-    Attribute resultZeroAttr = rewriter.getZeroAttr(resultETy);
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, linalgConvTy.getShape(), resultETy, filteredDims);
-    Value zero = rewriter.create<arith::ConstantOp>(loc, resultZeroAttr);
+    Value zero = resultETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     Value zeroTensor = rewriter
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})

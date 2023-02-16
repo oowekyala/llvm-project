@@ -669,10 +669,17 @@ void registerStorageTypeInterfaceImpls(mlir::MLIRContext *ctx) {
   // works for all integers
   IntegerType::attachInterface<IntegerStorageTypeItf>(*ctx);
 
-  // TOSA floats, need to attach them to concrete types
-  Float32Type::attachInterface<FloatStorageTypeItf>(*ctx);
-  Float16Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  // all builtin float types
   BFloat16Type::attachInterface<FloatStorageTypeItf>(*ctx);
+
+  Float16Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float32Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float64Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float80Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float128Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float8E4M3FNType::attachInterface<FloatStorageTypeItf>(*ctx);
+  Float8E5M2Type::attachInterface<FloatStorageTypeItf>(*ctx);
+  
 }
 
 } // namespace tosa
