@@ -65,9 +65,7 @@ static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
 
 static mlir::Value reifyConstantDim(int64_t attr,
                                     ImplicitLocOpBuilder &builder) {
-  return builder.createOrFold<arith::IndexCastOp>(
-      builder.getIndexType(),
-      builder.create<arith::ConstantOp>(builder.getI64IntegerAttr(attr)));
+  return builder.create<arith::ConstantOp>(builder.getIndexAttr(attr));
 }
 
 // Calculating the output width/height using the formula:
@@ -80,8 +78,7 @@ static mlir::Value getConvOutputDim(Location loc, Value inputDim,
                                     int64_t dilationAttr, Type inputETy,
                                     OpBuilder &rewriter) {
   ImplicitLocOpBuilder builder(loc, rewriter);
-  auto one = rewriter.create<arith::ConstantOp>(
-      loc, IntegerAttr::get(inputDim.getType(), 1)); // todo
+  auto one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
   Value padBefore = reifyConstantDim(padBeforeAttr, builder);
   Value paddedBefore = builder.create<arith::AddIOp>(inputDim, padBefore);
   Value padAfter = reifyConstantDim(padAfterAttr, builder);
@@ -242,7 +239,8 @@ public:
     weight = rewriter.create<tosa::TransposeOp>(loc, newWeightTy, weight,
                                                 weightPermValue);
 
-    Attribute resultZeroAttr = resultETy.materializeAttribute(rewriter, SpecialValueId::ZERO);
+    Attribute resultZeroAttr =
+        resultETy.materializeAttribute(rewriter, SpecialValueId::ZERO);
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
     Value zero = resultETy.materializeConstant(rewriter, loc, resultZeroAttr);
@@ -271,7 +269,7 @@ public:
     Value biasEmptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
 
-    if (isQuantized) {
+    if (isQuantized) { // todo:cf
       auto quantizationInfo = *op.getQuantizationInfo();
       auto iZp = rewriter.getI32IntegerAttr(quantizationInfo.getInputZp());
       auto kZp = rewriter.getI32IntegerAttr(quantizationInfo.getWeightZp());
@@ -523,7 +521,8 @@ public:
 
     SmallVector<Value> filteredDims = condenseValues(dynDims);
 
-    Value zero = outputElementTy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
+    Value zero = outputElementTy.materializeSpecialValue(rewriter, loc,
+                                                         SpecialValueId::ZERO);
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
     Value zeroTensor = rewriter
@@ -598,7 +597,8 @@ public:
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
 
     // When quantized, the input elemeny type is not the same as the output
-    Value zero = outputETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
+    Value zero =
+        outputETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     Value zeroTensor = rewriter
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})
@@ -694,7 +694,8 @@ public:
     SmallVector<Value> dynamicDims = *dynamicDimsOr;
 
     // Determine what the initial value needs to be for the max pool op.
-    Attribute initialAttr = resultETy.materializeAttribute(rewriter, SpecialValueId::RANGE_MIN);
+    Attribute initialAttr =
+        resultETy.materializeAttribute(rewriter, SpecialValueId::RANGE_MIN);
 
     // Apply padding as necessary.
     llvm::SmallVector<int64_t> pad;
@@ -703,7 +704,8 @@ public:
     pad.resize(pad.size() + 2, 0);
     Value paddedInput = applyPad(loc, input, pad, initialAttr, rewriter);
 
-    Value initialValue = resultETy.materializeConstant(rewriter, loc, initialAttr);
+    Value initialValue =
+        resultETy.materializeConstant(rewriter, loc, initialAttr);
 
     ArrayRef<int64_t> kernel = op.getKernel();
     ArrayRef<int64_t> stride = op.getStride();
