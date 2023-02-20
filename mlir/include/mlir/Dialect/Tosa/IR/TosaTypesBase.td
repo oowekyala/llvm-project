@@ -37,29 +37,20 @@ class Tosa_QuantizedType<string n, list<int> params, bit signed>
 // Non-Quantized Signed Integer Types.
 // Used to express accumulator results or compare results.
 //===----------------------------------------------------------------------===//
-def Tosa_AnyStorageType : Type<CPred<"$_self.isa<TosaStorageType>() || $_self.isa<TosaIntegerStorageType>()">>;
+def Tosa_AnyStorageType : Type<CPred<"$_self.isa<mlir::tosa::TosaStorageType>()">>;
+def Tosa_UInt8 : UI<8>;
+def Tosa_UInt16 : UI<16>;
 
-def Tosa_Int : Type<CPred<"$_self.isa<TosaIntegerStorageType>()">, "integer">;
-
-def Tosa_UInt : Type<And<[Tosa_Int.predicate, CPred<"$_self.cast<TosaIntegerStorageType>().isUnsigned()">]>, "unsigned integer">;
-
-class Tosa_HasWidth<int width> : CPred<"$_self.cast<TosaIntegerStorageType>().getWidth() == " # width>;
-class Tosa_UInt_Class<int width> : Type<And<[Tosa_UInt.predicate, Tosa_HasWidth<width>]>, "unsigned integer">;
-
-class Tosa_Int_Class<int width> : Type<And<[Tosa_Int.predicate, CPred<"!$_self.cast<TosaIntegerStorageType>().isUnsigned()">, Tosa_HasWidth<width>]>, "integer">;
-
-def Tosa_UInt8 : Tosa_UInt_Class<8>;
-def Tosa_UInt16 : Tosa_UInt_Class<16>;
-
-def Tosa_Int8 : Tosa_Int_Class<8>;
-def Tosa_Int16 : Tosa_Int_Class<16>;
-def Tosa_Int32 : Tosa_Int_Class<32>;
-def Tosa_Int48 : Tosa_Int_Class<48>;
-def Tosa_Int64 : Tosa_Int_Class<64>;
-def Tosa_Bool : Tosa_Int_Class<1>;
+def Tosa_Int8 : I<8>;
+def Tosa_Int16 : I<16>;
+def Tosa_Int32 : I<32>;
+def Tosa_Int48 : I<48>;
+def Tosa_Int64 : I<64>;
+def Tosa_Bool : I<1>;
 
 // No unsigned unquantized int types.
-def Tosa_SignedInt : Type<And<[Tosa_Int.predicate, CPred<"$_self.cast<TosaIntegerStorageType>().isSigned()">]>, "signed integer">;
+def Tosa_Int : Type<And<[Tosa_AnyStorageType.predicate, CPred<"$_self.cast<TosaStorageType>().isIntegral()">]>, "integer">;
+def Tosa_SignedInt : Type<And<[Tosa_Int.predicate, CPred<"$_self.cast<TosaStorageType>().isSigned()">]>, "signed integer">;
 
 def Tosa_Int32Or64 : AnyTypeOf<[Tosa_Int32, Tosa_Int64]>;
 
