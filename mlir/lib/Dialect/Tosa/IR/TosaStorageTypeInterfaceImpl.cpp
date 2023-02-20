@@ -21,7 +21,6 @@ using namespace mlir::tosa;
 using namespace mlir::tosa::detail;
 
 namespace {
-using Concept = TosaStorageTypeInterfaceTraits::Concept;
 
 Value lowerTosaToLinalgElementWiseOpDefault(Type elementTy,
                                             PatternRewriter &rewriter,
@@ -29,11 +28,14 @@ Value lowerTosaToLinalgElementWiseOpDefault(Type elementTy,
                                             ArrayRef<Type> resultTypes);
 
 /// Implementation of TosaStorageType for mlir's builtin IntegerType
-struct IntegerStorageTypeItf
-    : public TosaStorageTypeInterfaceTraits::ExternalModel<
-          IntegerStorageTypeItf, IntegerType> {
 
-  int getWidth(::mlir::Type t) const { return t.getIntOrFloatBitWidth(); }
+struct IntegerStorageTypeImpl
+    : public TosaStorageTypeInterfaceTraits::ExternalModel<
+          IntegerStorageTypeImpl, IntegerType> {
+
+  unsigned int getWidth(::mlir::Type t) const {
+    return t.getIntOrFloatBitWidth();
+  }
 
   bool isSigned(::mlir::Type t) const { return t.isSignedInteger(); }
   bool isSignless(::mlir::Type t) const { return t.isSignlessInteger(); }
@@ -44,29 +46,8 @@ struct IntegerStorageTypeItf
 
   Attribute materializeAttribute(::mlir::Type t, OpBuilder &rewriter,
                                  SpecialValueId value) const {
-    APInt v;
-    if (value == SpecialValueId::ZERO)
-      v = APInt(getWidth(t), 0, isSigned(t));
-
-    else if (value == SpecialValueId::ONE)
-      v = APInt(getWidth(t), 1, isSigned(t));
-
-    else if (value == SpecialValueId::RANGE_MIN)
-      if (isUnsigned(t))
-        v = APInt::getMinValue(getWidth(t));
-      else
-        v = APInt::getSignedMinValue(getWidth(t));
-
-    else if (value == SpecialValueId::RANGE_MAX)
-      if (isUnsigned(t))
-        v = APInt::getMaxValue(getWidth(t));
-      else
-        v = APInt::getSignedMaxValue(getWidth(t));
-
-    else if (value == SpecialValueId::ALL_ONES)
-      v = APInt::getAllOnes(getWidth(t));
-
-    return rewriter.getIntegerAttr(t, v);
+    return rewriter.getIntegerAttr(
+        t, t.cast<TosaIntegerStorageType>().produceSpecialValue(value));
   }
 
   Value materializeConstant(Type t, OpBuilder &rewriter, Location loc,
@@ -113,13 +94,73 @@ struct IntegerStorageTypeItf
     return {};
   }
 };
+struct IntegerIntStorageTypeImpl
+    : public TosaIntegerStorageTypeInterfaceTraits::ExternalModel<
+          IntegerIntStorageTypeImpl, IntegerType> {
+
+  APInt produceSpecialValue(::mlir::Type t, SpecialValueId value) const {
+    auto width = t.getIntOrFloatBitWidth();
+    if (value == SpecialValueId::ZERO)
+      return APInt(width, 0, t.isSignedInteger());
+
+    else if (value == SpecialValueId::ONE)
+      return APInt(width, 1, t.isSignedInteger());
+
+    else if (value == SpecialValueId::RANGE_MIN)
+      if (t.isUnsignedInteger())
+        return APInt::getMinValue(width);
+      else
+        return APInt::getSignedMinValue(width);
+
+    else if (value == SpecialValueId::RANGE_MAX)
+      if (t.isUnsignedInteger())
+        return APInt::getMaxValue(width);
+      else
+        return APInt::getSignedMaxValue(width);
+
+    else if (value == SpecialValueId::ALL_ONES)
+      return APInt::getAllOnes(width);
+
+    return APInt(); // cannot happen
+  }
+
+  std::optional<Attribute> fitIntoAttributeOrFail(::mlir::Type t,
+                                                  OpBuilder &rewriter,
+                                                  APInt value) const {
+
+    APInt intMin = produceSpecialValue(t, SpecialValueId::RANGE_MIN);
+    APInt intMax = produceSpecialValue(t, SpecialValueId::RANGE_MAX);
+
+    bool fits = t.isUnsignedInteger() ? intMin.ule(value) && value.ule(intMax)
+                                      : intMin.sle(value) && value.sle(intMax);
+    if (fits)
+      return rewriter.getIntegerAttr(t, value);
+
+    return {};
+  }
+
+  Attribute fitIntoAttributeOrSaturate(::mlir::Type t, OpBuilder &rewriter,
+                                       APInt value) const {
+
+    auto width = t.getIntOrFloatBitWidth();
+    if (width >= value.getBitWidth())
+      return rewriter.getIntegerAttr(t, value);
+
+    auto trunc =
+        t.isUnsignedInteger() ? value.truncUSat(width) : value.truncSSat(width);
+
+    return rewriter.getIntegerAttr(t, trunc);
+  }
+};
 
 /// Implementation of TosaStorageType for mlir's builtin IntegerType
 struct FloatStorageTypeItf
     : public TosaStorageTypeInterfaceTraits::ExternalModel<FloatStorageTypeItf,
                                                            FloatType> {
 
-  int getWidth(::mlir::Type t) const { return t.getIntOrFloatBitWidth(); }
+  unsigned int getWidth(::mlir::Type t) const {
+    return t.getIntOrFloatBitWidth();
+  }
 
   bool isSigned(::mlir::Type t) const { return true; }
   bool isSignless(::mlir::Type t) const { return false; }
@@ -519,29 +560,16 @@ Value lowerTosaToLinalgElementWiseOpDefault(Type elementType0,
 
     } else if (elementTy.isIntegral()) {
 
-      int32_t min = static_cast<int32_t>(
-          op->getAttr("min_int").cast<IntegerAttr>().getValue().getSExtValue());
-      int32_t max = static_cast<int32_t>(
-          op->getAttr("max_int").cast<IntegerAttr>().getValue().getSExtValue());
+      auto eTyAsInt = elementTy.cast<TosaIntegerStorageType>();
+      APInt min = op->getAttr("min_int").cast<IntegerAttr>().getValue();
+      APInt max = op->getAttr("max_int").cast<IntegerAttr>().getValue();
 
-      if (elementTy.isUnsignedInteger()) {
-        min = std::max<int32_t>(min, 0);
-        max = std::min<int32_t>(
-            max,
-            APInt::getMaxValue(elementTy.getWidth()).getSExtValue());
-      } else {
-        min = std::max<int32_t>(
-            min, APInt::getSignedMinValue(elementTy.getWidth())
-                     .getSExtValue());
-        max = std::min<int32_t>(
-            max, APInt::getSignedMaxValue(elementTy.getWidth())
-                     .getSExtValue());
-      }
+      auto realMin = eTyAsInt.fitIntoAttributeOrSaturate(rewriter, min);
+      auto realMax = eTyAsInt.fitIntoAttributeOrSaturate(rewriter, max);
 
-      auto minVal = rewriter.create<arith::ConstantIntOp>(
-          loc, min, elementTy.getWidth());
-      auto maxVal = rewriter.create<arith::ConstantIntOp>(
-          loc, max, elementTy.getWidth());
+      auto minVal = eTyAsInt.materializeConstant(rewriter, loc, realMin);
+      auto maxVal = eTyAsInt.materializeConstant(rewriter, loc, realMax);
+
       return clampIntHelper(loc, args[0], minVal, maxVal, rewriter);
     }
   }
@@ -667,7 +695,8 @@ namespace tosa {
 
 void registerStorageTypeInterfaceImpls(mlir::MLIRContext *ctx) {
   // works for all integers
-  IntegerType::attachInterface<IntegerStorageTypeItf>(*ctx);
+  IntegerType::attachInterface<IntegerStorageTypeImpl>(*ctx);
+  IntegerType::attachInterface<IntegerIntStorageTypeImpl>(*ctx);
 
   // all builtin float types
   BFloat16Type::attachInterface<FloatStorageTypeItf>(*ctx);
@@ -679,7 +708,6 @@ void registerStorageTypeInterfaceImpls(mlir::MLIRContext *ctx) {
   Float128Type::attachInterface<FloatStorageTypeItf>(*ctx);
   Float8E4M3FNType::attachInterface<FloatStorageTypeItf>(*ctx);
   Float8E5M2Type::attachInterface<FloatStorageTypeItf>(*ctx);
-  
 }
 
 } // namespace tosa

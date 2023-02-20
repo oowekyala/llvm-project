@@ -49,7 +49,7 @@ def Tosa_Int64 : I<64>;
 def Tosa_Bool : I<1>;
 
 // No unsigned unquantized int types.
-def Tosa_Int : Type<And<[Tosa_AnyStorageType.predicate, CPred<"$_self.cast<TosaStorageType>().isIntegral()">]>, "integer">;
+def Tosa_Int : Type<And<[Tosa_AnyStorageType.predicate, CPred<"$_self.isa<TosaIntegerStorageType>()">]>, "integer">;
 def Tosa_SignedInt : Type<And<[Tosa_Int.predicate, CPred<"$_self.cast<TosaStorageType>().isSigned()">]>, "signed integer">;
 
 def Tosa_Int32Or64 : AnyTypeOf<[Tosa_Int32, Tosa_Int64]>;

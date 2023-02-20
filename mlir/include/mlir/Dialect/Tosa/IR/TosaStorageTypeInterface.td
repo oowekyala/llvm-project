@@ -26,7 +26,7 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
         /*desc=*/[{
           Return the width of this type in bits.
         }],
-        /*retType=*/"int",
+        /*retType=*/"unsigned int",
         /*methodName=*/"getWidth"
       >,
       InterfaceMethod<
@@ -119,24 +119,51 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
      [[nodiscard]] bool isSignlessInteger() const {
       return isIntegral() && isSignless();
      }
-
-     [[nodiscard]] std::optional<::mlir::Attribute> fitIntoAttributeOrFail(::mlir::OpBuilder& rewriter, int64_t value) const {
-        if (isIntegral()) {
-          auto width = getWidth();
-
-          int64_t intMin =
-              APInt::getSignedMinValue(width).getSExtValue();
-          int64_t intMax =
-              APInt::getSignedMaxValue(width).getSExtValue();
-
-          if (intMin <= value && value <= intMax)
-            return rewriter.getIntegerAttr(IntegerType::get(getContext(), getWidth()), value);
-        }
-        return {};
-      }
-
   }];
 
 }
+
+// note that the name here is important to get Tablegen to generate this interface after TosaStorageTypeInterface
+def TosaStorageTypeInterface_ForInteger : TypeInterface<"TosaIntegerStorageType", [TosaStorageTypeInterface]> {
+  let description = [{
+     Extension of TosaStorageType for integer storage types.
+  }];
+
+  let methods = [
+      InterfaceMethod<
+        /*desc=*/[{
+          Convert an integer value to the underlying integer type. May fail if the value is not in range.
+        }],
+        /*retType=*/"std::optional<mlir::Attribute>",
+        /*methodName=*/"fitIntoAttributeOrFail",
+        /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "APInt":$value)
+      >,
+      InterfaceMethod<
+        /*desc=*/[{
+          Convert an integer value to the underlying integer type. If the value is too large for this type,
+          saturate to the min or max value of this type.
+        }],
+        /*retType=*/"mlir::Attribute",
+        /*methodName=*/"fitIntoAttributeOrSaturate",
+        /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "APInt":$value)
+      >,
+      InterfaceMethod<
+        /*desc=*/[{
+          Build an integer constant identified by the special value ID.
+        }],
+        /*retType=*/"llvm::APInt",
+        /*methodName=*/"produceSpecialValue",
+        /*args=*/(ins "::mlir::tosa::SpecialValueId":$value)
+      >
+  ];
+  let extraClassDeclaration = [{
+    public:
+     [[nodiscard]] std::optional<::mlir::Attribute> fitIntoAttributeOrFail(::mlir::OpBuilder& rewriter, int64_t value) const {
+        return fitIntoAttributeOrFail(rewriter, APInt(64, value));
+     }
+
+  }];
+}
+
 
 #endif
