@@ -30,6 +30,32 @@
 using namespace mlir;
 using namespace mlir::tosa;
 
+static bool isBuiltinType(Type t) { return t.isIntOrIndexOrFloat(); }
+static Type asBuiltinElementType(Type t) {
+  // TODO this hardcodes f32 regardless of the actual width of the types.
+  // That 32 bit width should be ignored.
+  if (t.cast<TosaStorageType>().isFloatingPoint())
+    return FloatType::getF32(t.getContext());
+  else if (t.cast<TosaStorageType>().isIntegral()) {
+    return IntegerType::get(t.getContext(),
+                            t.cast<TosaStorageType>().getWidth());
+  }
+  return t;
+}
+static Value asBuiltinType(ImplicitLocOpBuilder &rewriter, Value arg) {
+  if (auto shaped = arg.getType().dyn_cast<ShapedType>()) {
+    auto elt = shaped.getElementType();
+    if (isBuiltinType(elt))
+      return arg;
+    auto newT = shaped.cloneWith({}, asBuiltinElementType(elt));
+    return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
+  }
+  if (isBuiltinType(arg.getType()))
+    return arg;
+  auto newT = asBuiltinElementType(arg.getType());
+  return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
+}
+
 static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
                             Attribute padAttr, OpBuilder &rewriter) {
   // Input should be padded if necessary.
@@ -200,11 +226,13 @@ public:
     auto weightShape = weightTy.getShape();
 
     // Apply padding as necessary.
-    Attribute zeroAttr = inputETy.materializeAttribute(rewriter, SpecialValueId::ZERO);
+    Attribute zeroAttr =
+        inputETy.materializeAttribute(rewriter, SpecialValueId::ZERO);
     if (isQuantized) {
       auto quantizationInfo = *op.getQuantizationInfo();
-      auto zerop = inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
-          rewriter, quantizationInfo.getInputZp());
+      auto zerop =
+          inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+              rewriter, quantizationInfo.getInputZp());
 
       if (!zerop)
         return rewriter.notifyMatchFailure(
@@ -269,7 +297,7 @@ public:
     Value biasEmptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
 
-    if (isQuantized) { 
+    if (isQuantized) {
       auto quantizationInfo = *op.getQuantizationInfo();
       // accumulator type is i32
       auto iZp = rewriter.getI32IntegerAttr(quantizationInfo.getInputZp());
@@ -379,8 +407,10 @@ public:
       auto quantizationInfo =
           op->getAttr("quantization_info").cast<tosa::ConvOpQuantizationAttr>();
       APInt iZp = APInt(64, quantizationInfo.getInputZp());
-    
-      auto clampedZero = inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(rewriter, iZp);
+
+      auto clampedZero =
+          inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+              rewriter, iZp);
 
       if (!clampedZero)
         return rewriter.notifyMatchFailure(
@@ -419,7 +449,8 @@ public:
 
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, linalgConvTy.getShape(), resultETy, filteredDims);
-    Value zero = resultETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
+    Value zero =
+        resultETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     Value zeroTensor = rewriter
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})
@@ -516,8 +547,8 @@ public:
 
     SmallVector<Value> filteredDims = condenseValues(dynDims);
 
-    Value zero = outputETy.materializeSpecialValue(rewriter, loc,
-                                                         SpecialValueId::ZERO);
+    Value zero =
+        outputETy.materializeSpecialValue(rewriter, loc, SpecialValueId::ZERO);
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
     Value zeroTensor = rewriter
@@ -532,13 +563,15 @@ public:
     }
 
     auto quantizationInfo = *op.getQuantizationInfo();
-    auto aZP = outputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(rewriter, quantizationInfo.getAZp());
-    auto bZP = outputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(rewriter, quantizationInfo.getBZp());
+    auto aZP = outputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+        rewriter, quantizationInfo.getAZp());
+    auto bZP = outputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+        rewriter, quantizationInfo.getBZp());
 
     if (!aZP || !bZP) {
-        return rewriter.notifyMatchFailure(
-            op, "tosa.matmul op quantization has zp outside of input "
-                "range");
+      return rewriter.notifyMatchFailure(
+          op, "tosa.matmul op quantization has zp outside of input "
+              "range");
     }
 
     auto aZp = outputETy.materializeConstant(rewriter, loc, *aZP);
@@ -627,11 +660,19 @@ public:
             ->getResults();
 
     if (!op.getQuantizationInfo()) {
-      Value matmul = rewriter
-                         .create<linalg::MatmulOp>(
-                             loc, TypeRange{op.getType()},
-                             ValueRange{input, transposedWeight}, zeroTensor)
-                         ->getResult(0);
+      // floating point
+      // Add unrealized conversions to a builtin type so that arith doesn't fail
+      // validation during lowering. These need to be removed aggressively by
+      // the target dialect.
+      ImplicitLocOpBuilder builder(loc, rewriter);
+      Value convertedInput = asBuiltinType(builder, input);
+      Value convertedWeight = asBuiltinType(builder, transposedWeight);
+      Value matmul =
+          rewriter
+              .create<linalg::MatmulOp>(
+                  loc, TypeRange{op.getType()},
+                  ValueRange{convertedInput, convertedWeight}, zeroTensor)
+              ->getResult(0);
 
       Value result =
           rewriter
@@ -650,13 +691,17 @@ public:
     }
 
     auto quantizationInfo = *op.getQuantizationInfo();
-    auto inputZpAttr = inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(rewriter, quantizationInfo.getInputZp());
-    auto weightZpAttr = weightETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(rewriter, quantizationInfo.getWeightZp());
+    auto inputZpAttr =
+        inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+            rewriter, quantizationInfo.getInputZp());
+    auto weightZpAttr =
+        weightETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+            rewriter, quantizationInfo.getWeightZp());
 
     if (!inputZpAttr || !weightZpAttr) {
-        return rewriter.notifyMatchFailure(
-            op, "tosa.fully_connected op quantization has zp outside of input "
-                "range");
+      return rewriter.notifyMatchFailure(
+          op, "tosa.fully_connected op quantization has zp outside of input "
+              "range");
     }
 
     auto inputZp = inputETy.materializeConstant(rewriter, loc, *inputZpAttr);
