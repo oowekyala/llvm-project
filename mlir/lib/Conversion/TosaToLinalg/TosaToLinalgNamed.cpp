@@ -42,18 +42,20 @@ static Type asBuiltinElementType(Type t) {
   }
   return t;
 }
-static Value asBuiltinType(ImplicitLocOpBuilder &rewriter, Value arg) {
-  if (auto shaped = arg.getType().dyn_cast<ShapedType>()) {
+static Type asBuiltinType(Type t) {
+  if (auto shaped = t.dyn_cast<ShapedType>()) {
     auto elt = shaped.getElementType();
     if (isBuiltinType(elt))
-      return arg;
-    auto newT = shaped.cloneWith({}, asBuiltinElementType(elt));
-    return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
+      return t;
+    return shaped.cloneWith({}, asBuiltinElementType(elt));
   }
-  if (isBuiltinType(arg.getType()))
-    return arg;
-  auto newT = asBuiltinElementType(arg.getType());
-  return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
+  return asBuiltinElementType(t);
+}
+static Value asBuiltinType(ImplicitLocOpBuilder &rewriter, Value arg) {
+  auto newT = asBuiltinType(arg.getType());
+  if (newT != arg.getType())
+    return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
+  return arg;
 }
 
 static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
@@ -619,17 +621,6 @@ public:
 
     SmallVector<Value> filteredDims = condenseValues(dynDims);
 
-    // Creating maps for the output of MatMul and the bias
-    SmallVector<AffineMap, 4> indexingMaps;
-
-    // Broadcast the bias.
-    indexingMaps.push_back(AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0,
-                                          {rewriter.getAffineDimExpr(1)},
-                                          rewriter.getContext()));
-
-    indexingMaps.push_back(rewriter.getMultiDimIdentityMap(outputTy.getRank()));
-    indexingMaps.push_back(rewriter.getMultiDimIdentityMap(outputTy.getRank()));
-
     auto emptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, outputTy.getShape(), outputTy.getElementType(), filteredDims);
 
@@ -640,6 +631,8 @@ public:
                            .create<linalg::FillOp>(loc, ValueRange{zero},
                                                    ValueRange{emptyTensor})
                            .result();
+
+    Value indexZero = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(0));
 
     SmallVector<int64_t> permutation{1, 0};
     auto permutationAttr = rewriter.getI64TensorAttr(permutation);
@@ -659,71 +652,95 @@ public:
                                      filteredDims)
             ->getResults();
 
+    ImplicitLocOpBuilder builder(loc, rewriter);
+    Value convertedInput = asBuiltinType(builder, input);
+    Value convertedWeight = asBuiltinType(builder, transposedWeight);
+    Value convertedOutput = asBuiltinType(builder, zeroTensor);
+    Value matmul;
     if (!op.getQuantizationInfo()) {
       // floating point
       // Add unrealized conversions to a builtin type so that arith doesn't fail
       // validation during lowering. These need to be removed aggressively by
       // the target dialect.
-      ImplicitLocOpBuilder builder(loc, rewriter);
-      Value convertedInput = asBuiltinType(builder, input);
-      Value convertedWeight = asBuiltinType(builder, transposedWeight);
-      Value matmul =
+
+      matmul =
           rewriter
               .create<linalg::MatmulOp>(
-                  loc, TypeRange{op.getType()},
-                  ValueRange{convertedInput, convertedWeight}, zeroTensor)
+                  loc, TypeRange{asBuiltinType(op.getType())},
+                  ValueRange{convertedInput, convertedWeight}, convertedOutput)
               ->getResult(0);
 
-      Value result =
-          rewriter
-              .create<linalg::GenericOp>(
-                  loc, outputTy, ValueRange({bias, matmul}), biasEmptyTensor,
-                  indexingMaps, getNParallelLoopsAttrs(outputTy.getRank()),
-                  [&](OpBuilder &nestedBuilder, Location nestedLoc,
-                      ValueRange args) {
-                    Value added = nestedBuilder.create<arith::AddFOp>(
-                        loc, args[0], args[1]);
-                    nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
-                  })
-              .getResult(0);
-      rewriter.replaceOp(op, result);
-      return success();
+    } else {
+
+      auto quantizationInfo = *op.getQuantizationInfo();
+      auto inputZpAttr =
+          inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+              rewriter, quantizationInfo.getInputZp());
+      auto weightZpAttr =
+          weightETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
+              rewriter, quantizationInfo.getWeightZp());
+
+      if (!inputZpAttr || !weightZpAttr) {
+        return rewriter.notifyMatchFailure(
+            op, "tosa.fully_connected op quantization has zp outside of input "
+                "range");
+      }
+
+      auto inputZp = inputETy.materializeConstant(rewriter, loc, *inputZpAttr);
+      auto outputZp =
+          weightETy.materializeConstant(rewriter, loc, *weightZpAttr);
+
+      matmul = rewriter
+                   .create<linalg::QuantizedMatmulOp>(
+                       loc, TypeRange{op.getType()},
+                       ValueRange{convertedInput, convertedWeight, inputZp,
+                                  outputZp},
+                       convertedOutput)
+                   ->getResult(0);
     }
 
-    auto quantizationInfo = *op.getQuantizationInfo();
-    auto inputZpAttr =
-        inputETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
-            rewriter, quantizationInfo.getInputZp());
-    auto weightZpAttr =
-        weightETy.cast<TosaIntegerStorageType>().fitIntoAttributeOrFail(
-            rewriter, quantizationInfo.getWeightZp());
+    // may be a noop
+    Value matmulResult =
+        builder.create<UnrealizedConversionCastOp>(zeroTensor.getType(), matmul)
+            .getResult(0);
 
-    if (!inputZpAttr || !weightZpAttr) {
-      return rewriter.notifyMatchFailure(
-          op, "tosa.fully_connected op quantization has zp outside of input "
-              "range");
-    }
+    // Creating maps for the output of MatMul and the bias
+    SmallVector<AffineMap, 4> indexingMaps;
 
-    auto inputZp = inputETy.materializeConstant(rewriter, loc, *inputZpAttr);
-    auto outputZp = weightETy.materializeConstant(rewriter, loc, *weightZpAttr);
+    // Broadcast the bias.
+    indexingMaps.push_back(AffineMap::get(/*dimCount=*/2, /*symbolCount=*/0,
+                                          {rewriter.getAffineDimExpr(1)},
+                                          rewriter.getContext()));
 
-    Value matmul =
-        rewriter
-            .create<linalg::QuantizedMatmulOp>(
-                loc, TypeRange{op.getType()},
-                ValueRange{input, transposedWeight, inputZp, outputZp},
-                zeroTensor)
-            ->getResult(0);
+    indexingMaps.push_back(rewriter.getMultiDimIdentityMap(outputTy.getRank()));
+    indexingMaps.push_back(rewriter.getMultiDimIdentityMap(outputTy.getRank()));
+
     Value result =
         rewriter
             .create<linalg::GenericOp>(
-                loc, outputTy, ValueRange({bias, matmul}), biasEmptyTensor,
-                indexingMaps, getNParallelLoopsAttrs(outputTy.getRank()),
+                loc, outputTy, ValueRange({bias, matmulResult}),
+                biasEmptyTensor, indexingMaps,
+                getNParallelLoopsAttrs(outputTy.getRank()),
                 [&](OpBuilder &nestedBuilder, Location nestedLoc,
                     ValueRange args) {
-                  Value added = nestedBuilder.create<arith::AddIOp>(
-                      loc, args[0], args[1]);
-                  nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
+                  // Lift both scalars to tensors of 1 elements, because TOSA
+                  // only supports tensor arguments.
+                  auto argT = RankedTensorType::get({1}, args[0].getType());
+                  Value arg0 = nestedBuilder.create<tensor::FromElementsOp>(
+                      loc, argT, args[0]);
+                  Value arg1 = nestedBuilder.create<tensor::FromElementsOp>(
+                      loc, argT, args[1]);
+                  // will be recursively converted
+                  Value added = nestedBuilder.create<tosa::AddOp>(
+                      loc, TypeRange{argT},
+                      ValueRange{arg0, arg1});
+                     
+                // unlift
+                Value extract = nestedBuilder.create<tensor::ExtractOp>(
+                    loc, args[0].getType(),
+                    ValueRange{added, indexZero}
+                );
+                  nestedBuilder.create<linalg::YieldOp>(nestedLoc, extract);
                 })
             .getResult(0);
     rewriter.replaceOp(op, result);

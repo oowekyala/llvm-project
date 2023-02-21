@@ -24,28 +24,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Tosa/IR/TosaOpsDialect.h.inc"
+#include "mlir/Dialect/Tosa/IR/TosaStorageTypeInterface.h"
 
 namespace mlir {
-class PatternRewriter;
 
 namespace tosa {
 
-/// Identifier for a remarkable value in the value range of a TosaStorageType.
-enum class SpecialValueId {
-  /// Additive neuter element.
-  ZERO,
-  /// Multiplicative neuter element.
-  ONE,
-  /// Smallest value representable by this type.
-  RANGE_MIN,
-  /// Largest value representable by this type.
-  RANGE_MAX,
-  /// Value where all bits are set to one.
-  ALL_ONES
-};
-
 #include "mlir/Dialect/Tosa/IR/TosaInterfaces.h.inc"
-#include "mlir/Dialect/Tosa/IR/TosaStorageTypeInterface.h.inc"
 
 } // namespace tosa
 } // namespace mlir

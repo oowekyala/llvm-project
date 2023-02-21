@@ -20,6 +20,7 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
      Implemented by types that can be used as element types for tensors manipulated by TOSA ops.
      TOSA quantized types must use a Tosa_StorageType as the underlying carrier type.
   }];
+  let cppNamespace = "mlir::tosa";
 
   let methods = [
       InterfaceMethod<
@@ -68,7 +69,7 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
         /*desc=*/[{
           Create an attribute that holds the given value.
         }],
-        /*retType=*/"mlir::Attribute",
+        /*retType=*/"::mlir::Attribute",
         /*methodName=*/"materializeAttribute",
         /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "::mlir::tosa::SpecialValueId":$value)
       >,
@@ -76,7 +77,7 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
         /*desc=*/[{
           Materialize a constant of this type from an attribute. This may use eg arith.constant or so.
         }],
-        /*retType=*/"mlir::Value",
+        /*retType=*/"::mlir::Value",
         /*methodName=*/"materializeConstant",
         /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "::mlir::Location":$loc, "::mlir::Attribute":$constValue)
       >,
@@ -129,12 +130,13 @@ def TosaStorageTypeInterface_ForInteger : TypeInterface<"TosaIntegerStorageType"
      Extension of TosaStorageType for integer storage types.
   }];
 
+  let cppNamespace = "mlir::tosa";
   let methods = [
       InterfaceMethod<
         /*desc=*/[{
           Convert an integer value to the underlying integer type. May fail if the value is not in range.
         }],
-        /*retType=*/"std::optional<mlir::Attribute>",
+        /*retType=*/"::std::optional<mlir::Attribute>",
         /*methodName=*/"fitIntoAttributeOrFail",
         /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "APInt":$value)
       >,
@@ -143,7 +145,7 @@ def TosaStorageTypeInterface_ForInteger : TypeInterface<"TosaIntegerStorageType"
           Convert an integer value to the underlying integer type. If the value is too large for this type,
           saturate to the min or max value of this type.
         }],
-        /*retType=*/"mlir::Attribute",
+        /*retType=*/"::mlir::Attribute",
         /*methodName=*/"fitIntoAttributeOrSaturate",
         /*args=*/(ins "::mlir::OpBuilder&":$rewriter, "APInt":$value)
       >,
@@ -151,14 +153,14 @@ def TosaStorageTypeInterface_ForInteger : TypeInterface<"TosaIntegerStorageType"
         /*desc=*/[{
           Build an integer constant identified by the special value ID.
         }],
-        /*retType=*/"llvm::APInt",
+        /*retType=*/"::llvm::APInt",
         /*methodName=*/"produceSpecialValue",
         /*args=*/(ins "::mlir::tosa::SpecialValueId":$value)
       >
   ];
   let extraClassDeclaration = [{
     public:
-     [[nodiscard]] std::optional<::mlir::Attribute> fitIntoAttributeOrFail(::mlir::OpBuilder& rewriter, int64_t value) const {
+     [[nodiscard]] ::std::optional<::mlir::Attribute> fitIntoAttributeOrFail(::mlir::OpBuilder& rewriter, int64_t value) const {
         return fitIntoAttributeOrFail(rewriter, APInt(64, value));
      }
 
