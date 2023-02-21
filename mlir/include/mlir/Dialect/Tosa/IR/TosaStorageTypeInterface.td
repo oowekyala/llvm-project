@@ -103,7 +103,18 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
                       "::mlir::Operation*":$op,
                       "::mlir::ValueRange":$args
                  )
-      >
+      >,
+      InterfaceMethod<
+        /*desc=*/[{
+          Lower an addition on two items, should return this type.
+        }],
+        /*retType=*/"::mlir::Value",
+        /*methodName=*/"lowerAddOp",
+        /*args=*/(ins "::mlir::ImplicitLocOpBuilder&":$rewriter, 
+                      "::mlir::Value":$arg0,
+                      "::mlir::Value":$arg1
+                 )
+      >,
   ];
 
   code extraClassDeclaration = [{

@@ -632,8 +632,6 @@ public:
                                                    ValueRange{emptyTensor})
                            .result();
 
-    Value indexZero = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(0));
-
     SmallVector<int64_t> permutation{1, 0};
     auto permutationAttr = rewriter.getI64TensorAttr(permutation);
     Value permutationValue =
@@ -723,24 +721,10 @@ public:
                 getNParallelLoopsAttrs(outputTy.getRank()),
                 [&](OpBuilder &nestedBuilder, Location nestedLoc,
                     ValueRange args) {
-                  // Lift both scalars to tensors of 1 elements, because TOSA
-                  // only supports tensor arguments.
-                  auto argT = RankedTensorType::get({1}, args[0].getType());
-                  Value arg0 = nestedBuilder.create<tensor::FromElementsOp>(
-                      loc, argT, args[0]);
-                  Value arg1 = nestedBuilder.create<tensor::FromElementsOp>(
-                      loc, argT, args[1]);
-                  // will be recursively converted
-                  Value added = nestedBuilder.create<tosa::AddOp>(
-                      loc, TypeRange{argT},
-                      ValueRange{arg0, arg1});
-                     
-                // unlift
-                Value extract = nestedBuilder.create<tensor::ExtractOp>(
-                    loc, args[0].getType(),
-                    ValueRange{added, indexZero}
-                );
-                  nestedBuilder.create<linalg::YieldOp>(nestedLoc, extract);
+                  ImplicitLocOpBuilder nestedImplicitBuilder(nestedLoc, nestedBuilder);
+                  auto added = outputETy.lowerAddOp(nestedImplicitBuilder,
+                                                    args[0], args[1]);
+                  nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
                 })
             .getResult(0);
     rewriter.replaceOp(op, result);

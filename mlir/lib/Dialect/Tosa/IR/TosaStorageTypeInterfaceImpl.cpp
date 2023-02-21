@@ -93,6 +93,10 @@ struct IntegerStorageTypeImpl
 
     return {};
   }
+  Value lowerAddOp(Type t, ImplicitLocOpBuilder &rewriter, Value arg0,
+                   Value arg1) const {
+    return rewriter.create<arith::AddIOp>(ValueRange{arg0, arg1});
+  }
 };
 struct IntegerIntStorageTypeImpl
     : public TosaIntegerStorageTypeInterfaceTraits::ExternalModel<
@@ -210,6 +214,11 @@ struct FloatStorageTypeItf
       return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
     }
     return {};
+  }
+
+  Value lowerAddOp(Type t, ImplicitLocOpBuilder &rewriter, Value arg0,
+                   Value arg1) const {
+    return rewriter.create<arith::AddFOp>(ValueRange{arg0, arg1});
   }
 };
 
