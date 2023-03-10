@@ -30,34 +30,6 @@
 using namespace mlir;
 using namespace mlir::tosa;
 
-static bool isBuiltinType(Type t) { return t.isIntOrIndexOrFloat(); }
-static Type asBuiltinElementType(Type t) {
-  // TODO this hardcodes f32 regardless of the actual width of the types.
-  // That 32 bit width should be ignored.
-  if (t.cast<TosaStorageType>().isFloatingPoint())
-    return FloatType::getF32(t.getContext());
-  else if (t.cast<TosaStorageType>().isIntegral()) {
-    return IntegerType::get(t.getContext(),
-                            t.cast<TosaStorageType>().getWidth());
-  }
-  return t;
-}
-static Type asBuiltinType(Type t) {
-  if (auto shaped = t.dyn_cast<ShapedType>()) {
-    auto elt = shaped.getElementType();
-    if (isBuiltinType(elt))
-      return t;
-    return shaped.cloneWith({}, asBuiltinElementType(elt));
-  }
-  return asBuiltinElementType(t);
-}
-static Value asBuiltinType(ImplicitLocOpBuilder &rewriter, Value arg) {
-  auto newT = asBuiltinType(arg.getType());
-  if (newT != arg.getType())
-    return rewriter.create<UnrealizedConversionCastOp>(newT, arg).getResult(0);
-  return arg;
-}
-
 static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
                             Attribute padAttr, OpBuilder &rewriter) {
   // Input should be padded if necessary.
@@ -651,9 +623,6 @@ public:
             ->getResults();
 
     ImplicitLocOpBuilder builder(loc, rewriter);
-    Value convertedInput = asBuiltinType(builder, input);
-    Value convertedWeight = asBuiltinType(builder, transposedWeight);
-    Value convertedOutput = asBuiltinType(builder, zeroTensor);
     Value matmul;
     if (!op.getQuantizationInfo()) {
       // floating point
@@ -661,12 +630,11 @@ public:
       // validation during lowering. These need to be removed aggressively by
       // the target dialect.
 
-      matmul =
-          rewriter
-              .create<linalg::MatmulOp>(
-                  loc, TypeRange{asBuiltinType(op.getType())},
-                  ValueRange{convertedInput, convertedWeight}, convertedOutput)
-              ->getResult(0);
+      matmul = rewriter
+                   .create<linalg::MatmulOp>(
+                       loc, TypeRange{op.getType()},
+                       ValueRange{input, transposedWeight}, zeroTensor)
+                   ->getResult(0);
 
     } else {
 
@@ -691,16 +659,10 @@ public:
       matmul = rewriter
                    .create<linalg::QuantizedMatmulOp>(
                        loc, TypeRange{op.getType()},
-                       ValueRange{convertedInput, convertedWeight, inputZp,
-                                  outputZp},
-                       convertedOutput)
+                       ValueRange{input, transposedWeight, inputZp, outputZp},
+                       zeroTensor)
                    ->getResult(0);
     }
-
-    // may be a noop
-    Value matmulResult =
-        builder.create<UnrealizedConversionCastOp>(zeroTensor.getType(), matmul)
-            .getResult(0);
 
     // Creating maps for the output of MatMul and the bias
     SmallVector<AffineMap, 4> indexingMaps;
@@ -716,12 +678,12 @@ public:
     Value result =
         rewriter
             .create<linalg::GenericOp>(
-                loc, outputTy, ValueRange({bias, matmulResult}),
-                biasEmptyTensor, indexingMaps,
-                getNParallelLoopsAttrs(outputTy.getRank()),
+                loc, outputTy, ValueRange({bias, matmul}), biasEmptyTensor,
+                indexingMaps, getNParallelLoopsAttrs(outputTy.getRank()),
                 [&](OpBuilder &nestedBuilder, Location nestedLoc,
                     ValueRange args) {
-                  ImplicitLocOpBuilder nestedImplicitBuilder(nestedLoc, nestedBuilder);
+                  ImplicitLocOpBuilder nestedImplicitBuilder(nestedLoc,
+                                                             nestedBuilder);
                   auto added = outputETy.lowerAddOp(nestedImplicitBuilder,
                                                     args[0], args[1]);
                   nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
