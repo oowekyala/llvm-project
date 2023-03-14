@@ -30,6 +30,45 @@
 using namespace mlir;
 using namespace mlir::tosa;
 
+static mlir::NamedAttribute getLinalgEltWiseOpNameAttr(OpBuilder &rewriter,
+                                                       TosaStorageType t,
+                                                       linalg::BinaryFn opId) {
+  using linalg::BinaryFn;
+  switch (opId) {
+  case BinaryFn::add:
+    return rewriter.getNamedAttr(
+        "add", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  case BinaryFn::sub:
+    return rewriter.getNamedAttr(
+        "sub", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  case BinaryFn::mul:
+    return rewriter.getNamedAttr(
+        "mul", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  case BinaryFn::max_signed:
+    return rewriter.getNamedAttr(
+        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+    // todo
+  case BinaryFn::min_signed:
+    return rewriter.getNamedAttr(
+        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  case BinaryFn::max_unsigned:
+    return rewriter.getNamedAttr(
+        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  case BinaryFn::min_unsigned:
+    return rewriter.getNamedAttr(
+        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
+  default:
+    llvm_unreachable("unsupported binary function");
+  }
+}
+
+static SmallVector<NamedAttribute, 2>
+getLinalgAttributes(OpBuilder &rewriter, TosaStorageType inputETy) {
+  return {
+      getLinalgEltWiseOpNameAttr(rewriter, inputETy, linalg::BinaryFn::add),
+      getLinalgEltWiseOpNameAttr(rewriter, inputETy, linalg::BinaryFn::mul)};
+}
+
 static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
                             Attribute padAttr, OpBuilder &rewriter) {
   // Input should be padded if necessary.
@@ -633,7 +672,8 @@ public:
       matmul = rewriter
                    .create<linalg::MatmulOp>(
                        loc, TypeRange{op.getType()},
-                       ValueRange{input, transposedWeight}, zeroTensor)
+                       ValueRange{input, transposedWeight}, zeroTensor,
+                       ArrayRef(getLinalgAttributes(rewriter, inputETy)))
                    ->getResult(0);
 
     } else {
@@ -656,12 +696,13 @@ public:
       auto outputZp =
           weightETy.materializeConstant(rewriter, loc, *weightZpAttr);
 
-      matmul = rewriter
-                   .create<linalg::QuantizedMatmulOp>(
-                       loc, TypeRange{op.getType()},
-                       ValueRange{input, transposedWeight, inputZp, outputZp},
-                       zeroTensor)
-                   ->getResult(0);
+      matmul =
+          rewriter
+              .create<linalg::QuantizedMatmulOp>(
+                  loc, TypeRange{op.getType()},
+                  ValueRange{input, transposedWeight, inputZp, outputZp},
+                  zeroTensor, ArrayRef(getLinalgAttributes(rewriter, inputETy)))
+              ->getResult(0);
     }
 
     // Creating maps for the output of MatMul and the bias

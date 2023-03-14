@@ -17,6 +17,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 
 //===----------------------------------------------------------------------===//
 // TOSA dialect and structs includes.

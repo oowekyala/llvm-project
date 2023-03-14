@@ -115,6 +115,13 @@ def TosaStorageTypeInterface : TypeInterface<"TosaStorageType"> {
                       "::mlir::Value":$arg1
                  )
       >,
+      InterfaceMethod<
+        /*desc=*/[{
+        }],
+        /*retType=*/"::std::string",
+        /*methodName=*/"getBinFnOpName",
+        /*args=*/(ins "::mlir::linalg::BinaryFn":$opId)
+      >,
   ];
 
   code extraClassDeclaration = [{

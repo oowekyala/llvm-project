@@ -44,6 +44,26 @@ struct IntegerStorageTypeImpl
   bool isIntegral(::mlir::Type t) const { return true; }
   bool isFloatingPoint(::mlir::Type t) const { return false; }
 
+  std::string getBinFnOpName(Type t, linalg::BinaryFn opId) const {
+    using linalg::BinaryFn;
+    switch (opId) {
+    case BinaryFn::add:
+      return "arith.addi";
+    case BinaryFn::sub:
+      return "arith.subi";
+    case BinaryFn::mul:
+      return "arith.muli";
+    case BinaryFn::max_signed:
+      return "arith.maxsi";
+    case BinaryFn::min_signed:
+      return "arith.minsi";
+    case BinaryFn::max_unsigned:
+      return "arith.maxui";
+    case BinaryFn::min_unsigned:
+      return "arith.minui";
+    }
+  }
+
   Attribute materializeAttribute(::mlir::Type t, OpBuilder &rewriter,
                                  SpecialValueId value) const {
     return rewriter.getIntegerAttr(
@@ -188,6 +208,24 @@ struct FloatStorageTypeItf
       v = APFloat::getAllOnesValue(t.cast<FloatType>().getFloatSemantics());
 
     return rewriter.getFloatAttr(t, v);
+  }
+
+  std::string getBinFnOpName(Type t, linalg::BinaryFn opId) const {
+    using linalg::BinaryFn;
+    switch (opId) {
+    case BinaryFn::add:
+      return "arith.addf";
+    case BinaryFn::sub:
+      return "arith.subf";
+    case BinaryFn::mul:
+      return "arith.mulf";
+    case BinaryFn::max_unsigned:
+    case BinaryFn::max_signed:
+      return "arith.maxf";
+    case BinaryFn::min_unsigned:
+    case BinaryFn::min_signed:
+      return "arith.minf";
+    }
   }
 
   Value materializeConstant(Type t, OpBuilder &rewriter, Location loc,
