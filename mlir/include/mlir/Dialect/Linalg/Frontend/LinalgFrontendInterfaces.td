@@ -167,9 +167,9 @@ class Linalg_InstantiateOperatorOpInterface<
       return ::mlir::Value();
     }
 
-    static bool isOperatorInstance(::mlir::Operation &operation) {
+    static bool isOperatorInstance(::mlir::Operation* container, ::mlir::Operation &operation) {
     ::mlir::StringAttr strAttr =
-          operation.template getAttrOfType<::mlir::StringAttr>("}] # attrName #  [{");
+          (*container).template getAttrOfType<::mlir::StringAttr>("}] # attrName #  [{");
 
         if(strAttr) {
           // Attribute was specified: use operation from attribute
@@ -220,7 +220,7 @@ class Linalg_InstantiateOperatorOpInterface<
       /*args=*/(ins "::mlir::Operation &":$operation),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return Instantiate}] # operatorCamelCase # [{OperatorOpInterface::isOperatorInstance(operation);
+        return Instantiate}] # operatorCamelCase # [{OperatorOpInterface::isOperatorInstance($_op, operation);
       }]
     >,
 
