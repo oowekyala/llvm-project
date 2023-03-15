@@ -33,33 +33,10 @@ using namespace mlir::tosa;
 static mlir::NamedAttribute getLinalgEltWiseOpNameAttr(OpBuilder &rewriter,
                                                        TosaStorageType t,
                                                        linalg::BinaryFn opId) {
-  using linalg::BinaryFn;
-  switch (opId) {
-  case BinaryFn::add:
-    return rewriter.getNamedAttr(
-        "add", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  case BinaryFn::sub:
-    return rewriter.getNamedAttr(
-        "sub", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  case BinaryFn::mul:
-    return rewriter.getNamedAttr(
-        "mul", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  case BinaryFn::max_signed:
-    return rewriter.getNamedAttr(
-        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-    // todo
-  case BinaryFn::min_signed:
-    return rewriter.getNamedAttr(
-        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  case BinaryFn::max_unsigned:
-    return rewriter.getNamedAttr(
-        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  case BinaryFn::min_unsigned:
-    return rewriter.getNamedAttr(
-        "max_si", rewriter.getStringAttr(t.getBinFnOpName(opId)));
-  default:
-    llvm_unreachable("unsupported binary function");
-  }
+  llvm::StringRef attrName = linalg::stringifyBinaryFn(opId);
+
+  return rewriter.getNamedAttr(attrName,
+                               rewriter.getStringAttr(t.getBinFnOpName(opId)));
 }
 
 static SmallVector<NamedAttribute, 2>
@@ -76,7 +53,7 @@ static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
     return input;
 
   ShapedType inputTy = input.getType().cast<ShapedType>();
-  Type inputETy = inputTy.getElementType();
+  auto inputETy = inputTy.getElementType().cast<TosaStorageType>();
   auto inputShape = inputTy.getShape();
 
   assert((inputShape.size() * 2) == pad.size());
@@ -95,7 +72,7 @@ static mlir::Value applyPad(Location loc, Value input, ArrayRef<int64_t> pad,
     highIndices.push_back(rewriter.getIndexAttr(highPad));
   }
 
-  Value padValue = rewriter.create<arith::ConstantOp>(loc, padAttr);
+  Value padValue = inputETy.materializeConstant(rewriter, loc, padAttr);
 
   return rewriter.create<tensor::PadOp>(
       loc, RankedTensorType::get(paddedShape, inputETy), input, lowIndices,
@@ -310,6 +287,7 @@ public:
     Value biasEmptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
 
+    Value conv;
     if (isQuantized) {
       auto quantizationInfo = *op.getQuantizationInfo();
       // accumulator type is i32
@@ -318,34 +296,22 @@ public:
 
       auto iZpVal = rewriter.create<arith::ConstantOp>(loc, iZp);
       auto kZpVal = rewriter.create<arith::ConstantOp>(loc, kZp);
-      Value conv =
-          rewriter
-              .create<LinalgConvQOp>(
-                  loc, resultTy, ValueRange{input, weight, iZpVal, kZpVal},
-                  ValueRange{zeroTensor}, strideAttr, dilationAttr)
-              ->getResult(0);
+      conv = rewriter
+                 .create<LinalgConvQOp>(
+                     loc, resultTy, ValueRange{input, weight, iZpVal, kZpVal},
+                     ValueRange{zeroTensor}, strideAttr, dilationAttr,
+                     ArrayRef(getLinalgAttributes(rewriter, inputETy)))
+                 ->getResult(0);
 
-      Value result =
-          rewriter
-              .create<linalg::GenericOp>(
-                  loc, resultTy, ValueRange({bias, conv}), biasEmptyTensor,
-                  indexingMaps, getNParallelLoopsAttrs(resultTy.getRank()),
-                  [&](OpBuilder &nestedBuilder, Location nestedLoc,
-                      ValueRange args) {
-                    Value added = nestedBuilder.create<arith::AddIOp>(
-                        loc, args[0], args[1]);
-                    nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
-                  })
-              .getResult(0);
-      rewriter.replaceOp(op, result);
-      return success();
+    } else {
+
+      conv = rewriter
+                 .create<LinalgConvOp>(
+                     loc, resultTy, ValueRange{input, weight},
+                     ValueRange{zeroTensor}, strideAttr, dilationAttr,
+                     ArrayRef(getLinalgAttributes(rewriter, inputETy)))
+                 ->getResult(0);
     }
-
-    Value conv = rewriter
-                     .create<LinalgConvOp>(
-                         loc, resultTy, ValueRange{input, weight},
-                         ValueRange{zeroTensor}, strideAttr, dilationAttr)
-                     ->getResult(0);
 
     Value result =
         rewriter
@@ -354,8 +320,10 @@ public:
                 indexingMaps, getNParallelLoopsAttrs(resultTy.getRank()),
                 [&](OpBuilder &nestedBuilder, Location nestedLoc,
                     ValueRange args) {
-                  Value added = nestedBuilder.create<arith::AddFOp>(
-                      loc, args[0], args[1]);
+                  ImplicitLocOpBuilder nestedImplicitBuilder(nestedLoc,
+                                                             nestedBuilder);
+                  Value added = inputETy.lowerAddOp(nestedImplicitBuilder,
+                                                    args[0], args[1]);
                   nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
                 })
             .getResult(0);
@@ -471,60 +439,45 @@ public:
 
     Value biasEmptyTensor = rewriter.create<tensor::EmptyOp>(
         loc, resultTy.getShape(), resultETy, filteredDims);
+    Value conv;
     if (!isQuantized) {
-      Value conv = rewriter
-                       .create<linalg::DepthwiseConv2DNhwcHwcmOp>(
-                           loc, linalgConvTy, ValueRange{input, weight},
-                           ValueRange{zeroTensor}, strideAttr, dilationAttr)
-                       .getResult(0);
-
-      SmallVector<ReassociationExprs, 4> reassociationMap;
-      createDepthwiseConvCollapseMap(resultRank, reassociationMap, rewriter);
-      Value convReshape = rewriter.create<tensor::CollapseShapeOp>(
-          loc, resultTy, conv, reassociationMap);
-
-      Value result =
-          rewriter
-              .create<linalg::GenericOp>(
-                  loc, resultTy, ValueRange({bias, convReshape}),
-                  biasEmptyTensor, indexingMaps,
-                  getNParallelLoopsAttrs(resultRank),
-                  [&](OpBuilder &nestedBuilder, Location nestedLoc,
-                      ValueRange args) {
-                    Value added = nestedBuilder.create<arith::AddFOp>(
-                        loc, args[0], args[1]);
-                    nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
-                  })
-              .getResult(0);
-      rewriter.replaceOp(op, result);
+      conv = rewriter
+                 .create<linalg::DepthwiseConv2DNhwcHwcmOp>(
+                     loc, linalgConvTy, ValueRange{input, weight},
+                     ValueRange{zeroTensor}, strideAttr, dilationAttr,
+                     ArrayRef(getLinalgAttributes(rewriter, resultETy)))
+                 .getResult(0);
     } else {
       auto iZpVal = rewriter.create<arith::ConstantOp>(loc, iZp);
       auto kZpVal = rewriter.create<arith::ConstantOp>(loc, kZp);
-      Value conv =
+      conv =
           rewriter
               .create<linalg::DepthwiseConv2DNhwcHwcmQOp>(
                   loc, linalgConvTy, ValueRange{input, weight, iZpVal, kZpVal},
-                  ValueRange{zeroTensor}, strideAttr, dilationAttr)
+                  ValueRange{zeroTensor}, strideAttr, dilationAttr,
+                  ArrayRef(getLinalgAttributes(rewriter, resultETy)))
               .getResult(0);
-      SmallVector<ReassociationExprs, 4> reassociationMap;
-      createDepthwiseConvCollapseMap(resultRank, reassociationMap, rewriter);
-      Value convReshape = rewriter.create<tensor::CollapseShapeOp>(
-          loc, resultTy, conv, reassociationMap);
-      Value result =
-          rewriter
-              .create<linalg::GenericOp>(
-                  loc, resultTy, ValueRange({bias, convReshape}),
-                  biasEmptyTensor, indexingMaps,
-                  getNParallelLoopsAttrs(resultRank),
-                  [&](OpBuilder &nestedBuilder, Location nestedLoc,
-                      ValueRange args) {
-                    Value added = nestedBuilder.create<arith::AddIOp>(
-                        loc, args[0], args[1]);
-                    nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
-                  })
-              .getResult(0);
-      rewriter.replaceOp(op, result);
     }
+
+    SmallVector<ReassociationExprs, 4> reassociationMap;
+    createDepthwiseConvCollapseMap(resultRank, reassociationMap, rewriter);
+    Value convReshape = rewriter.create<tensor::CollapseShapeOp>(
+        loc, resultTy, conv, reassociationMap);
+    Value result =
+        rewriter
+            .create<linalg::GenericOp>(
+                loc, resultTy, ValueRange({bias, convReshape}), biasEmptyTensor,
+                indexingMaps, getNParallelLoopsAttrs(resultRank),
+                [&](OpBuilder &nestedBuilder, Location nestedLoc,
+                    ValueRange args) {
+                  ImplicitLocOpBuilder nestedImplicitBuilder(nestedLoc,
+                                                             nestedBuilder);
+                  Value added = resultETy.lowerAddOp(nestedImplicitBuilder,
+                                                     args[0], args[1]);
+                  nestedBuilder.create<linalg::YieldOp>(nestedLoc, added);
+                })
+            .getResult(0);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -571,7 +524,8 @@ public:
     if (!op.getQuantizationInfo()) {
       rewriter.replaceOpWithNewOp<linalg::BatchMatmulOp>(
           op, TypeRange{op.getType()},
-          ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{zeroTensor});
+          ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{zeroTensor},
+          ArrayRef(getLinalgAttributes(rewriter, outputETy)));
       return success();
     }
 
@@ -591,7 +545,8 @@ public:
     auto bZp = outputETy.materializeConstant(rewriter, loc, *bZP);
     rewriter.replaceOpWithNewOp<linalg::QuantizedBatchMatmulOp>(
         op, TypeRange{op.getType()},
-        ValueRange{adaptor.getA(), adaptor.getB(), aZp, bZp}, zeroTensor);
+        ValueRange{adaptor.getA(), adaptor.getB(), aZp, bZp}, zeroTensor,
+        ArrayRef(getLinalgAttributes(rewriter, outputETy)));
 
     return success();
   }
@@ -789,7 +744,9 @@ public:
 
     rewriter.replaceOpWithNewOp<linalg::PoolingNhwcMaxOp>(
         op, ArrayRef<Type>{resultTy}, ValueRange{paddedInput, fakeWindowDims},
-        filledEmptyTensor, strideAttr, dilationAttr);
+        filledEmptyTensor, strideAttr, dilationAttr,
+        ArrayRef{getLinalgEltWiseOpNameAttr(rewriter, resultETy,
+                                            linalg::BinaryFn::max_signed)});
     return success();
   }
 };
