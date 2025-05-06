@@ -2071,3 +2071,138 @@ OpFoldResult mlir::affine::linearizeIndex(OpBuilder &builder, Location loc,
   return affine::makeComposedFoldedAffineApply(builder, loc, linearIndexExpr,
                                                multiIndexAndStrides);
 }
+
+namespace {
+
+/// Find the index of the given value in the `dims` list,
+/// and append it if it was not already in the list. The
+/// dims list is a list of symbols or dimensions of the
+/// affine map. Within the results of an affine map, they
+/// are identified by their index, which is why we need
+/// this function.
+static std::optional<size_t>
+findInListOrAdd(Value value, llvm::SmallVectorImpl<Value> &dims,
+                function_ref<bool(Value)> isValidElement) {
+
+  Value *loopIV = std::find(dims.begin(), dims.end(), value);
+  if (loopIV != dims.end()) {
+    // We found an IV that already has an index, return that index.
+    return {std::distance(dims.begin(), loopIV)};
+  }
+  if (isValidElement(value)) {
+    // This is a valid element for the dim/symbol list, push this as a
+    // parameter.
+    size_t idx = dims.size();
+    dims.push_back(value);
+    return idx;
+  }
+  return std::nullopt;
+}
+
+/// Convert a value to an affine expr if possible. Adds dims and symbols
+/// if needed.
+static AffineExpr toAffineExpr(Value value,
+                               llvm::SmallVectorImpl<Value> &affineDims,
+                               llvm::SmallVectorImpl<Value> &affineSymbols) {
+  using namespace matchers;
+  IntegerAttr::ValueType cst;
+  if (matchPattern(value, m_ConstantInt(&cst))) {
+    return getAffineConstantExpr(cst.getSExtValue(), value.getContext());
+  }
+  Value lhs;
+  Value rhs;
+  if (matchPattern(value, m_Op<arith::AddIOp>(m_Any(&lhs), m_Any(&rhs))) ||
+      matchPattern(value, m_Op<arith::MulIOp>(m_Any(&lhs), m_Any(&rhs)))) {
+    AffineExpr lhsE;
+    AffineExpr rhsE;
+    if ((lhsE = toAffineExpr(lhs, affineDims, affineSymbols)) &&
+        (rhsE = toAffineExpr(rhs, affineDims, affineSymbols))) {
+      AffineExprKind kind;
+      if (isa<arith::AddIOp>(value.getDefiningOp())) {
+        kind = mlir::AffineExprKind::Add;
+      } else {
+        kind = mlir::AffineExprKind::Mul;
+      }
+      return getAffineBinaryOpExpr(kind, lhsE, rhsE);
+    }
+  } else if (auto applyOp = llvm::dyn_cast_or_null<affine::AffineApplyOp>(value.getDefiningOp())) {
+    // todo
+  }
+
+  if (auto dimIx = findInListOrAdd(value, affineSymbols, [](Value v) {
+        return affine::isValidSymbol(v);
+      })) {
+    return getAffineSymbolExpr(*dimIx, value.getContext());
+  }
+
+  if (auto dimIx = findInListOrAdd(
+          value, affineDims, [](Value v) { return affine::isValidDim(v); })) {
+
+    return getAffineDimExpr(*dimIx, value.getContext());
+  }
+
+  return {};
+}
+
+} // namespace
+
+LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
+    MLIRContext *ctx, ValueRange indices, AffineMap &map,
+    llvm::SmallVectorImpl<Value> &mapArgs) {
+  SmallVector<AffineExpr> results;
+  SmallVector<Value> symbols;
+  SmallVector<Value> dims;
+
+  for (Value indexExpr : indices) {
+    AffineExpr res = toAffineExpr(indexExpr, dims, symbols);
+    if (!res) {
+      return failure();
+    }
+    results.push_back(res);
+  }
+
+  map = AffineMap::get(dims.size(), symbols.size(), results, ctx);
+
+  dims.append(symbols);
+  mapArgs.swap(dims);
+  return success();
+}
+
+LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
+    MLIRContext *ctx, ArrayRef<OpFoldResult> indices, AffineMap &map,
+    llvm::SmallVectorImpl<OpFoldResult> &mapArgs) {
+  SmallVector<AffineExpr> results;
+  SmallVector<Value> symbols;
+  SmallVector<Value> dims;
+  SmallVector<OpFoldResult> constantSymbols;
+
+  for (OpFoldResult indexExpr : indices) {
+    if (auto asValue = llvm::dyn_cast_or_null<Value>(indexExpr)) {
+      AffineExpr res = toAffineExpr(asValue, dims, symbols);
+      if (!res) {
+        return failure();
+      }
+      results.push_back(res);
+    } else {
+      constantSymbols.push_back(indexExpr);
+      results.push_back(getAffineSymbolExpr(symbols.size(), ctx));
+      // add a null symbol here to increment the next symbol id.
+      symbols.emplace_back();
+    }
+  }
+
+  map = AffineMap::get(dims.size(), symbols.size(), results, ctx);
+
+  for (auto dim : dims) {
+    mapArgs.push_back(dim);
+  }
+  unsigned nextConstSymbol = 0;
+  for (auto symbol : symbols) {
+    if (symbol) {
+      mapArgs.push_back(symbol);
+    } else {
+      mapArgs.push_back(constantSymbols[nextConstSymbol++]);
+    }
+  }
+  return success();
+}
