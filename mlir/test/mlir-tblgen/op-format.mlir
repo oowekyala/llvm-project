@@ -545,3 +545,19 @@ func.func @else_anchor_op(%a: !test.else_anchor<?>, %b: !test.else_anchor<5>) {
   test.else_anchor(%b : !test.else_anchor<5>) {a = !test.else_anchor_struct<b = 0>}
   return
 }
+
+//===----------------------------------------------------------------------===//
+// ElseAnchorNoSpaceOp
+//===----------------------------------------------------------------------===//
+
+
+// CHECK-LABEL: @else_anchor_nospace_op
+func.func @else_anchor_nospace_op(%a: !test.else_anchor_nospace<?>, %b: !test.else_anchor_nospace<5>) {
+  // CHECK: test.else_anchor_nospace(kwthen) {a = !test.else_anchor_nospace_struct<?>}
+  test.else_anchor_nospace(kwthen) {a = !test.else_anchor_nospace_struct<?>}
+  // CHECK: test.else_anchor_nospace(kwelse %{{.*}} : !test.else_anchor_nospace<?>) {a = !test.else_anchor_nospace_struct<a = 0>}
+  test.else_anchor_nospace(kwelse %a : !test.else_anchor_nospace<?>) {a = !test.else_anchor_nospace_struct<a = 0>}
+  // CHECK: test.else_anchor_nospace(kwelse %{{.*}} : !test.else_anchor_nospace<5>) {a = !test.else_anchor_nospace_struct<b = 0>}
+  test.else_anchor_nospace(kwelse %b : !test.else_anchor_nospace<5>) {a = !test.else_anchor_nospace_struct<b = 0>}
+  return
+}

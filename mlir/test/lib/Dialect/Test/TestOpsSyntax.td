@@ -155,6 +155,14 @@ def ElseAnchorOp : TEST_Op<"else_anchor"> {
   let assemblyFormat = "`(` (`?`) : (`` $a^ `:` type($a))? `)` attr-dict";
 }
 
+def ElseAnchorNoSpaceOp : TEST_Op<"else_anchor_no_space"> {
+  let arguments = (ins Optional<AnyType>:$a);
+  // Test that even without the `` at the start of the else group,
+  // an extra space is not emitted when printing the else group.
+  let assemblyFormat = "`(` (`kwthen`) : ( `kwelse` $a^ `:` type($a))? `)` attr-dict";
+}
+
+
 // This is used to test that the default dialect is not elided when printing an
 // op with dots in the name to avoid parsing ambiguity.
 def OpWithDotInNameOp : TEST_Op<"op.with_dot_in_name"> {

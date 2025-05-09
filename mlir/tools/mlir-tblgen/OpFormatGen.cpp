@@ -2432,6 +2432,12 @@ void OperationFormat::genElementPrinter(FormatElement *element,
 
   // Emit an optional group.
   if (OptionalElement *optional = dyn_cast<OptionalElement>(element)) {
+    // Save this state to restore it before emitting the else group.
+    // Otherwise the state when emitting the else group is the one at
+    // the end of the then group.
+    const bool shouldEmitSpaceBeforeOptional = shouldEmitSpace;
+    const bool lastWasPunctuationBeforeOptional = lastWasPunctuation;
+
     // Emit the check for the presence of the anchor element.
     FormatElement *anchor = optional->getAnchor();
     body << "  if (";
@@ -2467,6 +2473,9 @@ void OperationFormat::genElementPrinter(FormatElement *element,
 
     // Emit each of the else elements.
     if (!elseElements.empty()) {
+      shouldEmitSpace = shouldEmitSpaceBeforeOptional;
+      lastWasPunctuation = lastWasPunctuationBeforeOptional;
+
       body << " else {\n";
       genElementPrinters(elseElements);
       body << "}";
