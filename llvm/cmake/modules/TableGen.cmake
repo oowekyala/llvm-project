@@ -118,6 +118,23 @@ function(tablegen project ofn)
     set(LLVM_TARGET_DEFINITIONS_ABSOLUTE ${CMAKE_CURRENT_SOURCE_DIR}/${LLVM_TARGET_DEFINITIONS})
   endif()
 
+
+  # tblgen_includes may contain generators that will evaluate to
+  # the empty string during generation of the build system. We 
+  # cannot just prepend each element with -I as that would make
+  # those add an -I argument with nothing behind to tblgen, and
+  # the executable will interpret the next argument as the included
+  # path.
+  # To fix this situation, the list of includes is made a generator
+  # itself, that filters out empty items ...
+  set(tblgen_includes
+    "$<LIST:FILTER,${tblgen_includes},EXCLUDE,^$>"
+  )
+  # ... and only then prepends -I.
+  set(tblgen_includes_with_I
+    "$<LIST:TRANSFORM,${tblgen_includes},PREPEND,-I>"
+  )
+
   # Append this file and its includes to the compile commands file.
   # This file is used by the TableGen LSP Language Server (tblgen-lsp-server).
   file(APPEND ${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml
@@ -126,9 +143,6 @@ function(tablegen project ofn)
       "  includes: \"${CMAKE_CURRENT_SOURCE_DIR};${tblgen_includes}\"\n"
   )
 
-  # Filter out empty items before prepending each entry with -I
-  list(REMOVE_ITEM tblgen_includes "")
-  list(TRANSFORM tblgen_includes PREPEND -I)
 
   set(tablegen_exe ${${project}_TABLEGEN_EXE})
   set(tablegen_depends ${${project}_TABLEGEN_TARGET} ${tablegen_exe})
@@ -141,7 +155,7 @@ function(tablegen project ofn)
 
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
     COMMAND ${tablegen_exe} ${ARG_UNPARSED_ARGUMENTS} -I ${CMAKE_CURRENT_SOURCE_DIR}
-    ${tblgen_includes}
+    "${tblgen_includes_with_I}"
     ${LLVM_TABLEGEN_FLAGS}
     ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
     ${tblgen_change_flag}
@@ -155,6 +169,7 @@ function(tablegen project ofn)
     ${LLVM_TARGET_DEPENDS}
     ${LLVM_TABLEGEN_JOB_POOL}
     COMMENT "Building ${ofn}..."
+    COMMAND_EXPAND_LISTS
     )
 
   # `make clean' must remove all those generated files:
