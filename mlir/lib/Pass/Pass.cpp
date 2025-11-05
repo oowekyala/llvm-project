@@ -435,10 +435,10 @@ StringRef OpPassManager::getOpAnchorName() const {
 /// Prints out the passes of the pass manager as the textual representation
 /// of pipelines. When `pretty` is true, the printed pipeline is formatted for
 /// readability.
-void printAsTextualPipeline(
+static void doPrintAsTextualPipeline(
     raw_indented_ostream &os, StringRef anchorName, bool hasRecursiveAnchor,
     const llvm::iterator_range<OpPassManager::pass_iterator> &passes,
-    bool pretty = false) {
+    bool pretty) {
   if (hasRecursiveAnchor) {
     os << "**";
   }
@@ -461,17 +461,19 @@ void printAsTextualPipeline(
   }
   os << ")";
 }
-void printAsTextualPipeline(
-    raw_ostream &os, StringRef anchorName,
+
+void mlir::detail::printAsTextualPipeline(
+    raw_ostream &os, StringRef anchorName, bool hasRecursiveAnchor,
     const llvm::iterator_range<OpPassManager::pass_iterator> &passes,
     bool pretty) {
   raw_indented_ostream indentedOS(os);
-  printAsTextualPipeline(indentedOS, anchorName, passes, pretty);
+  doPrintAsTextualPipeline(indentedOS, anchorName, hasRecursiveAnchor, passes,
+                           pretty);
 }
 void OpPassManager::printAsTextualPipeline(raw_ostream &os, bool pretty) const {
   StringRef anchorName = getOpAnchorName();
   raw_indented_ostream indentedOS(os);
-  ::printAsTextualPipeline(
+  mlir::detail::printAsTextualPipeline(
       indentedOS, anchorName, hasRecursiveAnchor(),
       {MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.begin(),
        MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.end()},

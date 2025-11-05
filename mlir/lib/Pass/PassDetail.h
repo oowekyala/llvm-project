@@ -130,6 +130,11 @@ private:
   std::unique_ptr<Impl> impl;
 };
 
+void printAsTextualPipeline(
+    raw_ostream &os, StringRef anchorName, bool hasRecursiveAnchor,
+    const llvm::iterator_range<OpPassManager::pass_iterator> &passes,
+    bool pretty = false);
+
 } // namespace detail
 } // namespace mlir
 #endif // MLIR_PASS_PASSDETAIL_H_

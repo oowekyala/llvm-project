@@ -61,11 +61,11 @@ struct LoopTiling : public affine::impl::AffineLoopTilingBase<LoopTiling> {
 
 /// Get bands of loops that are valid to tile from the top-level of `f`.
 static void
-getTopLevelTileableBands(func::FuncOp f,
+getTopLevelTileableBands(Operation* f,
                          std::vector<SmallVector<AffineForOp, 6>> &bands) {
   // Get maximal perfect nest of 'affine.for' ops starting from root
   // (inclusive).
-  for (AffineForOp forOp : f.getOps<AffineForOp>()) {
+  for (AffineForOp forOp : f->getRegion(0).getOps<AffineForOp>()) {
     SmallVector<AffineForOp, 6> band;
     getPerfectlyNestedLoops(band, forOp);
     if (isTilingValid(band))
