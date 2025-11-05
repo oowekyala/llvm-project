@@ -4,10 +4,6 @@
 # Adds the name of the generated file to TABLEGEN_OUTPUT.
 include(LLVMDistributionSupport)
 
-# Clear out any pre-existing compile_commands file before processing. This
-# allows for generating a clean compile_commands on each configure.
-file(REMOVE ${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml)
-
 function(tablegen project ofn)
   cmake_parse_arguments(ARG "" "" "DEPENDS;EXTRA_INCLUDES" ${ARGN})
 
@@ -20,6 +16,13 @@ function(tablegen project ofn)
   if(NOT ${project}_TABLEGEN_EXE)
     message(FATAL_ERROR "${project}_TABLEGEN_EXE not set")
   endif()
+
+  # Set the include directories
+  get_directory_property(tblgen_includes INCLUDE_DIRECTORIES)
+  list(PREPEND tblgen_includes ${ARG_EXTRA_INCLUDES})
+  list(PREPEND tblgen_includes ${CMAKE_CURRENT_SOURCE_DIR})
+  # Filter out any empty include items.
+  list(REMOVE_ITEM tblgen_includes "")
 
   # Use depfile instead of globbing arbitrary *.td(s) for Ninja. We force
   # CMake versions older than v3.30 on Windows to use the fallback behavior
@@ -42,22 +45,16 @@ function(tablegen project ofn)
       -d ${ofn}.d
       DEPFILE ${ofn}.d
       )
-    set(local_tds)
     set(global_tds)
   else()
-    file(GLOB local_tds "*.td")
-    file(GLOB_RECURSE global_tds "${LLVM_MAIN_INCLUDE_DIR}/llvm/*.td")
+    set(include_td_dirs "${tblgen_includes}")
+    list(TRANSFORM include_td_dirs APPEND "/*.td")
+    file(GLOB global_tds ${include_td_dirs})
     set(additional_cmdline
       -o ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
       )
   endif()
 
-  if (IS_ABSOLUTE ${LLVM_TARGET_DEFINITIONS})
-    set(LLVM_TARGET_DEFINITIONS_ABSOLUTE ${LLVM_TARGET_DEFINITIONS})
-  else()
-    set(LLVM_TARGET_DEFINITIONS_ABSOLUTE
-      ${CMAKE_CURRENT_SOURCE_DIR}/${LLVM_TARGET_DEFINITIONS})
-  endif()
   if (LLVM_ENABLE_DAGISEL_COV AND "-gen-dag-isel" IN_LIST ARGN)
     list(APPEND LLVM_TABLEGEN_FLAGS "-instrument-coverage")
   endif()
@@ -92,32 +89,21 @@ function(tablegen project ofn)
     list(APPEND LLVM_TABLEGEN_FLAGS "-no-warn-on-unused-template-args")
   endif()
 
-  # We need both _TABLEGEN_TARGET and _TABLEGEN_EXE in the  DEPENDS list
-  # (both the target and the file) to have .inc files rebuilt on
-  # a tablegen change, as cmake does not propagate file-level dependencies
-  # of custom targets. See the following ticket for more information:
-  # https://cmake.org/Bug/view.php?id=15858
-  # The dependency on both, the target and the file, produces the same
-  # dependency twice in the result file when
-  # ("${${project}_TABLEGEN_TARGET}" STREQUAL "${${project}_TABLEGEN_EXE}")
-  # but lets us having smaller and cleaner code here.
-  get_directory_property(tblgen_includes INCLUDE_DIRECTORIES)
-  list(APPEND tblgen_includes ${ARG_EXTRA_INCLUDES})
-
-  # Get the current set of include paths for this td file.
-  cmake_parse_arguments(ARG "" "" "DEPENDS;EXTRA_INCLUDES" ${ARGN})
-  get_directory_property(tblgen_includes INCLUDE_DIRECTORIES)
-  list(APPEND tblgen_includes ${ARG_EXTRA_INCLUDES})
-  # Filter out any empty include items.
-  list(REMOVE_ITEM tblgen_includes "")
-
   # Build the absolute path for the current input file.
   if (IS_ABSOLUTE ${LLVM_TARGET_DEFINITIONS})
     set(LLVM_TARGET_DEFINITIONS_ABSOLUTE ${LLVM_TARGET_DEFINITIONS})
   else()
-    set(LLVM_TARGET_DEFINITIONS_ABSOLUTE ${CMAKE_CURRENT_SOURCE_DIR}/${LLVM_TARGET_DEFINITIONS})
+    set(LLVM_TARGET_DEFINITIONS_ABSOLUTE
+      ${CMAKE_CURRENT_SOURCE_DIR}/${LLVM_TARGET_DEFINITIONS})
   endif()
 
+  # Append this file and its includes to the compile commands file.
+  # This file is used by the TableGen LSP Language Server (tblgen-lsp-server).
+  file(APPEND ${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml
+      "--- !FileInfo:\n"
+      "  filepath: \"${LLVM_TARGET_DEFINITIONS_ABSOLUTE}\"\n"
+      "  includes: \"${tblgen_includes}\"\n"
+  )
 
   # tblgen_includes may contain generators that will evaluate to
   # the empty string during generation of the build system. We 
@@ -131,19 +117,19 @@ function(tablegen project ofn)
     "$<LIST:FILTER,${tblgen_includes},EXCLUDE,^$>"
   )
   # ... and only then prepends -I.
-  set(tblgen_includes_with_I
+  set(tblgen_includes
     "$<LIST:TRANSFORM,${tblgen_includes},PREPEND,-I>"
   )
 
-  # Append this file and its includes to the compile commands file.
-  # This file is used by the TableGen LSP Language Server (tblgen-lsp-server).
-  file(APPEND ${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml
-      "--- !FileInfo:\n"
-      "  filepath: \"${LLVM_TARGET_DEFINITIONS_ABSOLUTE}\"\n"
-      "  includes: \"${CMAKE_CURRENT_SOURCE_DIR};${tblgen_includes}\"\n"
-  )
-
-
+  # We need both _TABLEGEN_TARGET and _TABLEGEN_EXE in the  DEPENDS list
+  # (both the target and the file) to have .inc files rebuilt on
+  # a tablegen change, as cmake does not propagate file-level dependencies
+  # of custom targets. See the following ticket for more information:
+  # https://cmake.org/Bug/view.php?id=15858
+  # The dependency on both, the target and the file, produces the same
+  # dependency twice in the result file when
+  # ("${${project}_TABLEGEN_TARGET}" STREQUAL "${${project}_TABLEGEN_EXE}")
+  # but lets us having smaller and cleaner code here.
   set(tablegen_exe ${${project}_TABLEGEN_EXE})
   set(tablegen_depends ${${project}_TABLEGEN_TARGET} ${tablegen_exe})
 
@@ -154,8 +140,8 @@ function(tablegen project ofn)
   endif()
 
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
-    COMMAND ${tablegen_exe} ${ARG_UNPARSED_ARGUMENTS} -I ${CMAKE_CURRENT_SOURCE_DIR}
-    "${tblgen_includes_with_I}"
+    COMMAND ${tablegen_exe} ${ARG_UNPARSED_ARGUMENTS}
+    ${tblgen_includes}
     ${LLVM_TABLEGEN_FLAGS}
     ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
     ${tblgen_change_flag}
@@ -164,7 +150,7 @@ function(tablegen project ofn)
     # directory and local_tds may not contain it, so we must
     # explicitly list it here:
     DEPENDS ${ARG_DEPENDS} ${tablegen_depends}
-      ${local_tds} ${global_tds}
+      ${global_tds}
     ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
     ${LLVM_TARGET_DEPENDS}
     ${LLVM_TABLEGEN_JOB_POOL}
@@ -274,3 +260,11 @@ macro(add_tablegen target project)
     set_property(GLOBAL APPEND PROPERTY ${export_upper}_EXPORTS ${target})
   endif()
 endmacro()
+
+# Make sure 'tablegen_compile_commands.yml' is only deleted once the very
+# first time this file is included.
+include_guard(GLOBAL)
+
+# Clear out any pre-existing compile_commands file before processing. This
+# allows for generating a clean compile_commands on each configure.
+file(REMOVE ${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml)
