@@ -153,7 +153,7 @@ function(tablegen project ofn)
 
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${ofn} ${EXTRA_OUTPUTS}
     COMMAND ${tablegen_exe} ${ARG_UNPARSED_ARGUMENTS}
-    ${tblgen_includes}
+    "${tblgen_includes}"
     ${LLVM_TABLEGEN_FLAGS}
     ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
     ${tblgen_change_flag}
