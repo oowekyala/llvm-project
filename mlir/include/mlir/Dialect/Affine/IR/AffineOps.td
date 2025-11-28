@@ -20,6 +20,7 @@ include "mlir/Interfaces/InferIntRangeInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/LoopLikeInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/OpAsmInterface.td"
 
 def Affine_Dialect : Dialect {
   let name = "affine";
@@ -135,7 +136,9 @@ def AffineForOp : Affine_Op<"for",
       "getInitsMutable", "getYieldedValuesMutable",
       "replaceWithAdditionalYields"]>,
      DeclareOpInterfaceMethods<RegionBranchOpInterface,
-     ["getEntrySuccessorOperands", "getSuccessorInputs"]>]> {
+     ["getEntrySuccessorOperands", "getSuccessorInputs"]>,
+     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>
+     ]> {
   let summary = "for operation";
   let description = [{
     Syntax:

@@ -2478,6 +2478,14 @@ AffineForOp::getYieldedValuesMutable() {
   return cast<AffineYieldOp>(getBody()->getTerminator()).getOperandsMutable();
 }
 
+void AffineForOp::getAsmBlockArgumentNames(Region &region,
+                                           OpAsmSetValueNameFn setName) {
+  setName(getInductionVar(), "i");
+  for (auto parm : getRegionIterArgs()) {
+    setName(parm, "acc");
+  }
+}
+
 void AffineForOp::print(OpAsmPrinter &p) {
   p << ' ';
   p.printRegionArgument(getBody()->getArgument(0), /*argAttrs=*/{},
