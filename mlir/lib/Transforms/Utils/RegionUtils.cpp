@@ -157,7 +157,7 @@ SmallVector<Value> mlir::makeRegionIsolatedFromAbove(
   // Create a mapping between the captured values and the new arguments added.
   IRMapping map;
   auto replaceIfFn = [&](OpOperand &use) {
-    return region.isAncestor(use.getOwner()->getParentRegion());
+    return region.isAncestor(use.getOwner()->getBlock()->getParent());
   };
 
   for (auto [arg, capturedVal] :
