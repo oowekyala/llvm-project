@@ -130,10 +130,10 @@ LogicalResult mlir::affine::promoteIfSingleIteration(AffineForOp forOp) {
   auto *parentBlock = forOp->getBlock();
   if (!iv.use_empty()) {
     if (forOp.hasConstantLowerBound()) {
-      auto func = forOp->getParentOfType<FunctionOpInterface>();
+      auto* func = forOp->getParentWithTrait<OpTrait::AffineScope>();
       OpBuilder builder(forOp->getContext());
       if (func)
-        builder.setInsertionPointToStart(&func.getFunctionBody().front());
+        builder.setInsertionPointToStart(&func->getRegion(0).front());
       else
         builder.setInsertionPoint(forOp);
       auto constOp = arith::ConstantIndexOp::create(
