@@ -16,6 +16,7 @@
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/ValueBoundsOpInterfaceImpl.h"
+#include "mlir/Dialect/Affine/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/Transforms/BufferDeallocationOpInterfaceImpl.h"
@@ -157,6 +158,7 @@ void mlir::registerAllDialects(DialectRegistry &registry) {
 
   // Register all external models.
   affine::registerValueBoundsOpInterfaceExternalModels(registry);
+  affine::registerBufferizableOpInterfaceExternalModels(registry);
   arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   arith::registerBufferizableOpInterfaceExternalModels(registry);
   arith::registerBufferViewFlowOpInterfaceExternalModels(registry);

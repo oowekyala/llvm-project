@@ -1003,7 +1003,9 @@ bufferizableInPlaceAnalysisImpl(OpOperand &operand, OneShotAnalysisState &state,
   else
     state.bufferizeInPlace(operand);
 
-  LDBG() << "//===-------------------------------------------===//";
+  LDBG() << " => bufferized "
+         << (foundInterference ? "out of place" : "in place") << '\n';
+  LDBG() << "//===-------------------------------------------===//\n";
   return success();
 }
 

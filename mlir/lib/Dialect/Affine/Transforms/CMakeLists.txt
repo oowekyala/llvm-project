@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRAffineTransforms
   AffineLoopNormalize.cpp
   AffineParallelize.cpp
   AffineScalarReplacement.cpp
+  BufferizableOpInterfaceImpl.cpp
   DecomposeAffineOps.cpp
   FoldMemRefAliasOps.cpp
   LoopCoalescing.cpp
@@ -34,6 +35,8 @@ add_mlir_dialect_library(MLIRAffineTransforms
   MLIRAffineAnalysis
   MLIRAffineUtils
   MLIRArithDialect
+  MLIRBufferizationDialect
+  MLIRBufferizationTransforms
   MLIRIR
   MLIRMemRefDialect
   MLIRMemRefUtils

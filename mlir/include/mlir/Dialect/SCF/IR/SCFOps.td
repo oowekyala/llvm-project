@@ -152,7 +152,7 @@ def ExecuteRegionOp : SCF_Op<"execute_region", [
 //===----------------------------------------------------------------------===//
 
 def ForOp : SCF_Op<"for",
-      [AutomaticAllocationScope, DeclareOpInterfaceMethods<LoopLikeOpInterface,
+      [AutomaticAllocationScope, AffineScope, DeclareOpInterfaceMethods<LoopLikeOpInterface,
        ["getInitsMutable", "getLoopResults", "getRegionIterArgs",
         "getLoopInductionVars", "getLoopLowerBounds", "getLoopSteps",
         "getLoopUpperBounds", "getStaticTripCount", "getYieldedValuesMutable",
