@@ -2455,8 +2455,9 @@ void mlir::linalg::populateElementwiseOpsFusionPatterns(
     const ControlFusionFn &controlElementwiseOpsFusion) {
   auto *context = patterns.getContext();
   patterns.add<FuseElementwiseOps>(context, controlElementwiseOpsFusion);
-  patterns.add<FoldFillWithGenericOp, FoldScalarOrSplatConstant,
-               RemoveOutsDependency>(context);
+  patterns.add<FoldFillWithGenericOp, FoldScalarOrSplatConstant>(context);
+  // ,
+  //              RemoveOutsDependency>(context);
   // Add the patterns that clean up dead operands and results.
   populateEraseUnusedOperandsAndResultsPatterns(patterns);
 }
