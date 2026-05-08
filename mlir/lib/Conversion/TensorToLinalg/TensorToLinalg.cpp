@@ -20,9 +20,26 @@ using namespace mlir;
 //===----------------------------------------------------------------------===//
 // Pattern population
 //===----------------------------------------------------------------------===//
+namespace {
+
+struct TensorSplatToLinalgFill : public OpRewritePattern<tensor::SplatOp> {
+  using OpRewritePattern<tensor::SplatOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(tensor::SplatOp splatOp,
+                                PatternRewriter &rewriter) const override {
+
+    auto empty = tensor::EmptyOp::create(rewriter, splatOp->getLoc(),
+                                         splatOp.getResult().getType(),
+                                         splatOp.getDynamicSizes());
+    auto fill = linalg::FillOp::create(rewriter, splatOp->getLoc(),
+                                       splatOp.getInput(), empty.getResult());
+    rewriter.replaceOp(splatOp, fill);
+    return llvm::success();
+  }
+};
+} // namespace
 
 void mlir::populateTensorToLinalgPatterns(RewritePatternSet &patterns) {
   // TODO: Add the remaining patterns, e.g. to decompose Pack/Unpack Ops.
   // Alternatively, delete this file.
-  patterns.add<mlir::linalg::DecomposePadOpPattern>(patterns.getContext());
+  patterns.add<mlir::linalg::DecomposePadOpPattern, TensorSplatToLinalgFill>(patterns.getContext());
 }

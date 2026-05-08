@@ -34,7 +34,7 @@ class ConvertTensorToLinalgPass
     target
         .addLegalDialect<mlir::arith::ArithDialect, mlir::linalg::LinalgDialect,
                          mlir::tensor::TensorDialect>();
-    target.addIllegalOp<mlir::tensor::PadOp>();
+    target.addIllegalOp<mlir::tensor::PadOp, mlir::tensor::SplatOp>();
 
     RewritePatternSet patterns(&context);
     populateTensorToLinalgPatterns(patterns);
