@@ -241,10 +241,22 @@ void OpPassManagerImpl::addPass(std::unique_ptr<Pass> pass) {
         return nest(*passOpName).addPass(std::move(pass));
       return nestAny().addPass(std::move(pass));
     }
-    llvm::report_fatal_error(llvm::Twine("Can't add pass '") + pass->getName() +
-                             "' restricted to '" + *passOpName +
-                             "' on a PassManager intended to run on '" +
-                             getOpAnchorName() + "', did you intend to nest?");
+    if (passOpName) {
+      llvm::report_fatal_error(
+          llvm::Twine("Can't add pass '") + pass->getName() +
+          "' restricted to '" + *passOpName +
+          "' on a PassManager intended to run on '" + getOpAnchorName() +
+          "', did you intend to nest?");
+
+    } else {
+      llvm::report_fatal_error(
+          llvm::Twine("Can't add pass '") + pass->getName() +
+          "' on a PassManager intended to run on '" + getOpAnchorName() +
+          "', did you intend to nest? This error occurs because the pass "
+          "cannot be scheduled on " +
+          getOpAnchorName() +
+          " due to the dynamic callback canScheduleOn returning false.");
+    }
   }
 
   passes.emplace_back(std::move(pass));
