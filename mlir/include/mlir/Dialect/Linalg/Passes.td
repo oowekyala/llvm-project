@@ -240,4 +240,27 @@ def LinalgBlockPackMatmul : Pass<"linalg-block-pack-matmul"> {
   ];
 }
 
+def EmptyTensorEliminationPass : Pass<"eliminate-empty-tensors", ""> {
+  let summary = "Try to eliminate all tensor.empty ops.";
+  let description = [{
+    Try to eliminate "tensor.empty" ops inside `op`. This transformation looks
+    for subset ops that insert a tensor that originates from a "tensor.empty"
+    (as per the reverse use-def chain). Such "tensor.empty" ops are replaced
+    with the destination subset.
+
+    E.g.:
+    ```
+    %0 = tensor.empty() : tensor<10xf32>
+    %1 = linalg.fill ... outs(%0 : tensor<10xf32>)
+    %2 = tensor.insert_slice %1 into %t ...
+    ```
+
+    In the above example, the subset op is "tensor.insert_slice". When tracing
+    back the reverse use-def chain of a the source, we end up at a
+    "tensor.empty" op. The "tensor.empty" op is replaced with a
+    "tensor.extract_slice" op.
+  }];
+}
+
+
 #endif // MLIR_DIALECT_LINALG_PASSES
