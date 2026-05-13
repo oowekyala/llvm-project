@@ -381,7 +381,7 @@ public:
   template <typename InterfaceT>
   bool hasPromiseOrImplementsInterface() const {
     return dialect_extension_detail::hasPromisedInterface(
-               getDialect(), getTypeID(), InterfaceT::getInterfaceID()) ||
+               *getDialect(), getTypeID(), InterfaceT::getInterfaceID()) ||
            hasInterface<InterfaceT>();
   }
 
