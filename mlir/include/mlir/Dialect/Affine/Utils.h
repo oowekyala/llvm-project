@@ -352,14 +352,15 @@ OpFoldResult linearizeIndex(OpBuilder &builder, Location loc,
 /// only possible if the indices are an expression of valid dims and
 /// args. If this succeeds, the affine map is populated, along with
 /// the map arguments (concrete bindings for dims and symbols).
-LogicalResult
-convertValuesToAffineMapAndArgs(MLIRContext *ctx, ValueRange indices,
-                                AffineMap &map,
-                                llvm::SmallVectorImpl<Value> &mapArgs);
-LogicalResult
-convertValuesToAffineMapAndArgs(MLIRContext *ctx,
-                                ArrayRef<OpFoldResult> indices, AffineMap &map,
-                                llvm::SmallVectorImpl<OpFoldResult> &mapArgs);
+/// If failIfNotAffine is true, then all expressions must be valid affine
+/// dims or symbols. Otherwise, invalid dims or symbols will be treated as
+/// a symbol anyway.
+LogicalResult convertValuesToAffineMapAndArgs(
+    MLIRContext *ctx, ValueRange indices, AffineMap &map,
+    llvm::SmallVectorImpl<Value> &mapArgs, bool failIfNotAffine = true);
+LogicalResult convertValuesToAffineMapAndArgs(
+    MLIRContext *ctx, ArrayRef<OpFoldResult> indices, AffineMap &map,
+    llvm::SmallVectorImpl<OpFoldResult> &mapArgs, bool failIfNotAffine = true);
 
 /// Ensure that all operations that could be executed after `start`
 /// (noninclusive) and prior to `memOp` (e.g. on a control flow/op path

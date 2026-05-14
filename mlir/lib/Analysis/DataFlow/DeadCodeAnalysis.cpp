@@ -459,8 +459,7 @@ static std::optional<SmallVector<Attribute>> getOperandValuesImpl(
   SmallVector<Attribute> operands;
   operands.reserve(op->getNumOperands());
   for (Value operand : op->getOperands()) {
-    Lattice<ConstantValue> *cv = getOrCreate<Lattice<ConstantValue>>(operand);
-    cv->useDefSubscribe(this);
+    const auto *cv = getLattice(operand);
     // If any of the operands' values are uninitialized, bail out.
     if (cv->getValue().isUninitialized()) {
       if (failIfAnyNull)

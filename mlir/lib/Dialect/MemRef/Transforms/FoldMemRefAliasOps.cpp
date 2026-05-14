@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Affine/ViewLikeInterfaceUtils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -29,7 +30,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include <cstdint>
+#include "llvm/Support/LogicalResult.h"
 
 #define DEBUG_TYPE "fold-memref-alias-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -176,11 +177,33 @@ public:
     if (!srcSubView)
       return failure();
 
+    // todo
     SmallVector<OpFoldResult> newOffsets, newSizes, newStrides;
     if (failed(affine::mergeOffsetsSizesAndStrides(
             rewriter, subView.getLoc(), srcSubView, subView,
             srcSubView.getDroppedDims(), newOffsets, newSizes, newStrides)))
       return failure();
+    // // TODO: relax unit stride assumption.
+    // if (!subView.hasUnitStride()) {
+    //   return rewriter.notifyMatchFailure(subView, "requires unit strides");
+    // }
+    // if (!srcSubView.hasUnitStride()) {
+    //   return rewriter.notifyMatchFailure(srcSubView, "requires unit strides");
+    // }
+
+    // // Resolve sizes according to dropped dims.
+    // SmallVector<OpFoldResult> resolvedSizes;
+    // llvm::SmallBitVector srcDroppedDims = srcSubView.getDroppedDims();
+    // affine::resolveSizesIntoOpWithSizes(srcSubView.getMixedSizes(),
+    //                                     subView.getMixedSizes(), srcDroppedDims,
+    //                                     resolvedSizes);
+
+    // // Resolve offsets according to source offsets and strides.
+    // SmallVector<Value> resolvedOffsets;
+    // (void)affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+    //     rewriter, subView.getLoc(), srcSubView.getMixedOffsets(),
+    //     srcSubView.getMixedStrides(), srcDroppedDims, subView.getMixedOffsets(),
+    //     resolvedOffsets);
 
     // Replace original op.
     rewriter.replaceOpWithNewOp<memref::SubViewOp>(
@@ -312,6 +335,23 @@ static LogicalResult preconditionsFoldSubViewOp(RewriterBase &rewriter,
   return preconditionsFoldSubViewOpImpl(rewriter, writeOp, subviewOp);
 }
 
+
+static SmallVector<Value>
+calculateExpandedAccessIndices(AffineMap affineMap,
+                               const SmallVector<Value> &indices, Location loc,
+                               PatternRewriter &rewriter) {
+  SmallVector<OpFoldResult> indicesOfr(llvm::to_vector(
+      llvm::map_range(indices, [](Value v) -> OpFoldResult { return v; })));
+  SmallVector<Value> expandedIndices;
+  for (unsigned i = 0, e = affineMap.getNumResults(); i < e; i++) {
+    OpFoldResult ofr = affine::makeComposedFoldedAffineApply(
+        rewriter, loc, affineMap.getSubMap({i}), indicesOfr);
+    expandedIndices.push_back(
+        getValueOrCreateConstantIndexOp(rewriter, loc, ofr));
+  }
+  return expandedIndices;
+}
+
 template <typename OpTy>
 LogicalResult LoadOpOfSubViewOpFolder<OpTy>::matchAndRewrite(
     OpTy loadOp, PatternRewriter &rewriter) const {
@@ -326,11 +366,26 @@ LogicalResult LoadOpOfSubViewOpFolder<OpTy>::matchAndRewrite(
   if (failed(preconditionResult))
     return preconditionResult;
 
+  SmallVector<Value> indices(loadOp.getIndices().begin(),
+                             loadOp.getIndices().end());
+  // For affine ops, we need to apply the map to get the operands to get the
+  // "actual" indices.
+  bool allOperandsMustBeAffine = false;
+  if (auto affineLoadOp =
+          dyn_cast<affine::AffineLoadOp>(loadOp.getOperation())) {
+    AffineMap affineMap = affineLoadOp.getAffineMap();
+    auto expandedIndices = calculateExpandedAccessIndices(
+        affineMap, indices, loadOp.getLoc(), rewriter);
+    indices.assign(expandedIndices.begin(), expandedIndices.end());
+    allOperandsMustBeAffine = true;
+  }
   SmallVector<Value> sourceIndices;
-  affine::resolveIndicesIntoOpWithOffsetsAndStrides(
-      rewriter, loadOp.getLoc(), subViewOp.getMixedOffsets(),
-      subViewOp.getMixedStrides(), subViewOp.getDroppedDims(),
-      loadOp.getIndices(), sourceIndices);
+  if (failed(affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+          rewriter, loadOp.getLoc(), subViewOp.getMixedOffsets(),
+          subViewOp.getMixedStrides(), subViewOp.getDroppedDims(), indices,
+          sourceIndices, allOperandsMustBeAffine))) {
+    return failure();
+  }
 
   llvm::TypeSwitch<Operation *, void>(loadOp)
       .Case([&](memref::LoadOp op) {
@@ -496,11 +551,26 @@ LogicalResult StoreOpOfSubViewOpFolder<OpTy>::matchAndRewrite(
   if (failed(preconditionResult))
     return preconditionResult;
 
+  SmallVector<Value> indices(storeOp.getIndices().begin(),
+                             storeOp.getIndices().end());
+  // For affine ops, we need to apply the map to get the operands to get the
+  // "actual" indices.
+  bool allOperandsMustBeAffine = false;
+  if (auto affineStoreOp =
+          dyn_cast<affine::AffineStoreOp>(storeOp.getOperation())) {
+    AffineMap affineMap = affineStoreOp.getAffineMap();
+    auto expandedIndices = calculateExpandedAccessIndices(
+        affineMap, indices, storeOp.getLoc(), rewriter);
+    indices.assign(expandedIndices.begin(), expandedIndices.end());
+    allOperandsMustBeAffine = true;
+  }
   SmallVector<Value> sourceIndices;
-  affine::resolveIndicesIntoOpWithOffsetsAndStrides(
-      rewriter, storeOp.getLoc(), subViewOp.getMixedOffsets(),
-      subViewOp.getMixedStrides(), subViewOp.getDroppedDims(),
-      storeOp.getIndices(), sourceIndices);
+  if (failed(affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+          rewriter, storeOp.getLoc(), subViewOp.getMixedOffsets(),
+          subViewOp.getMixedStrides(), subViewOp.getDroppedDims(), indices,
+          sourceIndices, allOperandsMustBeAffine))) {
+    return llvm::failure();
+  }
 
   llvm::TypeSwitch<Operation *, void>(storeOp)
       .Case([&](memref::StoreOp op) {
@@ -824,7 +894,7 @@ LogicalResult NVGPUAsyncCopyOpSubViewOpFolder::matchAndRewrite(
 
   if (srcSubViewOp) {
     LLVM_DEBUG(DBGS() << "srcSubViewOp : " << srcSubViewOp << "\n");
-    affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+    (void)affine::resolveIndicesIntoOpWithOffsetsAndStrides(
         rewriter, copyOp.getLoc(), srcSubViewOp.getMixedOffsets(),
         srcSubViewOp.getMixedStrides(), srcSubViewOp.getDroppedDims(),
         copyOp.getSrcIndices(), foldedSrcIndices);
@@ -836,7 +906,7 @@ LogicalResult NVGPUAsyncCopyOpSubViewOpFolder::matchAndRewrite(
 
   if (dstSubViewOp) {
     LLVM_DEBUG(DBGS() << "dstSubViewOp : " << dstSubViewOp << "\n");
-    affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+    (void)affine::resolveIndicesIntoOpWithOffsetsAndStrides(
         rewriter, copyOp.getLoc(), dstSubViewOp.getMixedOffsets(),
         dstSubViewOp.getMixedStrides(), dstSubViewOp.getDroppedDims(),
         copyOp.getDstIndices(), foldedDstIndices);

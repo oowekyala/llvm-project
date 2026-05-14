@@ -2255,7 +2255,8 @@ findInListOrAdd(Value value, llvm::SmallVectorImpl<Value> &dims,
 /// if needed.
 static AffineExpr toAffineExpr(Value value,
                                llvm::SmallVectorImpl<Value> &affineDims,
-                               llvm::SmallVectorImpl<Value> &affineSymbols) {
+                               llvm::SmallVectorImpl<Value> &affineSymbols,
+                               bool failIfNotAffine) {
   using namespace matchers;
   IntegerAttr::ValueType cst;
   if (matchPattern(value, m_ConstantInt(&cst))) {
@@ -2271,10 +2272,10 @@ static AffineExpr toAffineExpr(Value value,
     // recursion. The depth of these expressions should be in most
     // cases very manageable, as affine expressions should be as
     // simple as `a + b * c`.
-    AffineExpr lhsE =
-        toAffineExpr(definingOp->getOperand(0), affineDims, affineSymbols);
-    AffineExpr rhsE =
-        toAffineExpr(definingOp->getOperand(1), affineDims, affineSymbols);
+    AffineExpr lhsE = toAffineExpr(definingOp->getOperand(0), affineDims,
+                                   affineSymbols, failIfNotAffine);
+    AffineExpr rhsE = toAffineExpr(definingOp->getOperand(1), affineDims,
+                                   affineSymbols, failIfNotAffine);
 
     if (lhsE && rhsE) {
       AffineExprKind kind;
@@ -2305,20 +2306,26 @@ static AffineExpr toAffineExpr(Value value,
     return getAffineDimExpr(*dimIx, value.getContext());
   }
 
-  return {};
+  if (failIfNotAffine)
+    return {};
+
+  // otherwise treat as a symbol anyway for more resilience
+  auto symExpr = getAffineSymbolExpr(affineSymbols.size(), value.getContext());
+  affineSymbols.push_back(value);
+  return symExpr;
 }
 
 } // namespace
 
 LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
     MLIRContext *ctx, ValueRange indices, AffineMap &map,
-    llvm::SmallVectorImpl<Value> &mapArgs) {
+    llvm::SmallVectorImpl<Value> &mapArgs, bool failIfNotAffine) {
   SmallVector<AffineExpr> results;
   SmallVector<Value> symbols;
   SmallVector<Value> dims;
 
   for (Value indexExpr : indices) {
-    AffineExpr res = toAffineExpr(indexExpr, dims, symbols);
+    AffineExpr res = toAffineExpr(indexExpr, dims, symbols, failIfNotAffine);
     if (!res) {
       return failure();
     }
@@ -2334,7 +2341,7 @@ LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
 
 LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
     MLIRContext *ctx, ArrayRef<OpFoldResult> indices, AffineMap &map,
-    llvm::SmallVectorImpl<OpFoldResult> &mapArgs) {
+    llvm::SmallVectorImpl<OpFoldResult> &mapArgs, bool failIfNotAffine) {
   SmallVector<AffineExpr> results;
   SmallVector<Value> symbols;
   SmallVector<Value> dims;
@@ -2342,7 +2349,7 @@ LogicalResult mlir::affine::convertValuesToAffineMapAndArgs(
 
   for (OpFoldResult indexExpr : indices) {
     if (auto asValue = llvm::dyn_cast_or_null<Value>(indexExpr)) {
-      AffineExpr res = toAffineExpr(asValue, dims, symbols);
+      AffineExpr res = toAffineExpr(asValue, dims, symbols, failIfNotAffine);
       if (!res) {
         return failure();
       }

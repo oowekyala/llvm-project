@@ -13,6 +13,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
+#include "llvm/Support/LogicalResult.h"
 
 using namespace mlir;
 using namespace affine;
@@ -80,13 +81,13 @@ LogicalResult mlir::affine::mergeOffsetsSizesAndStrides(
       combinedOffsets, combinedSizes, combinedStrides);
 }
 
-void mlir::affine::resolveIndicesIntoOpWithOffsetsAndStrides(
+LogicalResult mlir::affine::resolveIndicesIntoOpWithOffsetsAndStrides(
     RewriterBase &rewriter, Location loc,
     ArrayRef<OpFoldResult> mixedSourceOffsets,
     ArrayRef<OpFoldResult> mixedSourceStrides,
     const llvm::SmallBitVector &rankReducedDims,
     ArrayRef<OpFoldResult> consumerIndices,
-    SmallVectorImpl<Value> &resolvedIndices) {
+    SmallVectorImpl<Value> &resolvedIndices, bool allOperandsMustBeAffine) {
   OpFoldResult zero = rewriter.getIndexAttr(0);
 
   // For each dimension that is rank-reduced, add a zero to the indices.
@@ -98,18 +99,19 @@ void mlir::affine::resolveIndicesIntoOpWithOffsetsAndStrides(
     indices.push_back(ofr);
   }
 
-  resolvedIndices.resize(indices.size());
   resolvedIndices.clear();
+  resolvedIndices.reserve(indices.size());
   for (auto [offset, index, stride] :
        llvm::zip_equal(mixedSourceOffsets, indices, mixedSourceStrides)) {
     AffineMap map;
     SmallVector<OpFoldResult> mapArgs;
     auto *ctx = rewriter.getContext();
     if (failed(affine::convertValuesToAffineMapAndArgs(
-            ctx, {offset, index, stride}, map, mapArgs))) {
-      // todo
-      resolvedIndices.push_back(Value{});
-      continue;
+            ctx, {offset, index, stride}, map, mapArgs,
+            allOperandsMustBeAffine))) {
+      // This will only be taken if allOperandsMustBeAffine was true, and some
+      // operands used here are not valid affine dims or symbols.
+      return llvm::failure();
     }
     AffineExpr off, ix, str;
     bindDims(ctx, off, ix, str);
@@ -122,6 +124,7 @@ void mlir::affine::resolveIndicesIntoOpWithOffsetsAndStrides(
     resolvedIndices.push_back(
         getValueOrCreateConstantIndexOp(rewriter, loc, ofr));
   }
+  return llvm::success();
 }
 
 void mlir::affine::resolveSizesIntoOpWithSizes(

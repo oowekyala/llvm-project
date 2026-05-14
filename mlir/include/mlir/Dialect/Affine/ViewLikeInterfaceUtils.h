@@ -71,23 +71,25 @@ mergeOffsetsSizesAndStrides(OpBuilder &builder, Location loc,
 ///    %2 = load %0[%arg0 + %i1 * %stride1][%arg1 + %i2 * %stride2] :
 ///         memref<12x42xf32>å
 /// ```
-void resolveIndicesIntoOpWithOffsetsAndStrides(
+LogicalResult resolveIndicesIntoOpWithOffsetsAndStrides(
     RewriterBase &rewriter, Location loc,
     ArrayRef<OpFoldResult> mixedSourceOffsets,
     ArrayRef<OpFoldResult> mixedSourceStrides,
     const llvm::SmallBitVector &rankReducedDims,
     ArrayRef<OpFoldResult> consumerIndices,
-    SmallVectorImpl<Value> &resolvedIndices);
+    SmallVectorImpl<Value> &resolvedIndices,
+    bool allOperandsMustBeAffine = false);
 
-inline void resolveIndicesIntoOpWithOffsetsAndStrides(
+inline LogicalResult resolveIndicesIntoOpWithOffsetsAndStrides(
     RewriterBase &rewriter, Location loc,
     ArrayRef<OpFoldResult> mixedSourceOffsets,
     ArrayRef<OpFoldResult> mixedSourceStrides,
     const llvm::SmallBitVector &rankReducedDims, ValueRange consumerIndices,
-    SmallVectorImpl<Value> &resolvedIndices) {
+    SmallVectorImpl<Value> &resolvedIndices,
+    bool allOperandsMustBeAffine = false) {
   return resolveIndicesIntoOpWithOffsetsAndStrides(
       rewriter, loc, mixedSourceOffsets, mixedSourceStrides, rankReducedDims,
-      getAsOpFoldResult(consumerIndices), resolvedIndices);
+      getAsOpFoldResult(consumerIndices), resolvedIndices, allOperandsMustBeAffine);
 }
 
 /// Given `sourceSizes`, `destSizes` and information about which dimensions are
