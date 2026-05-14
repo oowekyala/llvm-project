@@ -1906,6 +1906,73 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+/// Greedily build a reassociation that partitions \p more dims into groups
+/// whose products match the corresponding \p fewer dim. Returns false if no
+/// valid partition exists (e.g. when a split would cross a dimension boundary).
+static bool buildReassociation(ArrayRef<int64_t> fewer,
+                               ArrayRef<int64_t> more,
+                               SmallVectorImpl<ReassociationIndices> &reassoc) {
+  reassoc.clear();
+  int moreIdx = 0;
+  int moreRank = static_cast<int>(more.size());
+  for (int64_t target : fewer) {
+    ReassociationIndices group;
+    int64_t product = 1;
+    while (moreIdx < moreRank && product < target) {
+      product *= more[moreIdx];
+      group.push_back(moreIdx++);
+    }
+    if (product != target)
+      return false;
+    reassoc.push_back(std::move(group));
+  }
+  // Absorb any trailing size-1 dims that remain unassigned.
+  while (moreIdx < moreRank) {
+    if (more[moreIdx] != 1)
+      return false;
+    reassoc.back().push_back(moreIdx++);
+  }
+  return !reassoc.empty();
+}
+
+/// If a static tensor.reshape can be expressed as a collapse_shape or
+/// expand_shape (i.e. its rank change is achievable by merging or splitting
+/// consecutive dimension groups), replace it with the reassociative form, as
+/// it is easier to analyse.
+struct FoldReshapeIntoReassociativeReshape : OpRewritePattern<ReshapeOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ReshapeOp op,
+                                PatternRewriter &rewriter) const override {
+    auto srcType = dyn_cast<RankedTensorType>(op.getSource().getType());
+    auto dstType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!srcType || !dstType || !srcType.hasStaticShape() ||
+        !dstType.hasStaticShape())
+      return failure();
+    int srcRank = srcType.getRank(), dstRank = dstType.getRank();
+    if (srcRank == dstRank || srcRank == 0 || dstRank == 0)
+      return failure();
+
+    SmallVector<ReassociationIndices> reassoc;
+    if (srcRank > dstRank) {
+      if (!buildReassociation(dstType.getShape(), srcType.getShape(), reassoc))
+        return failure();
+      rewriter.replaceOpWithNewOp<CollapseShapeOp>(op, dstType,
+                                                   op.getSource(), reassoc);
+    } else {
+      if (!buildReassociation(srcType.getShape(), dstType.getShape(), reassoc))
+        return failure();
+      rewriter.replaceOpWithNewOp<ExpandShapeOp>(op, dstType, op.getSource(),
+                                                 reassoc);
+    }
+    return success();
+  }
+};
+
+void ReshapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                            MLIRContext *context) {
+  results.add<FoldReshapeIntoReassociativeReshape>(context);
+}
+
 //===----------------------------------------------------------------------===//
 // Reassociative reshape ops
 //===----------------------------------------------------------------------===//

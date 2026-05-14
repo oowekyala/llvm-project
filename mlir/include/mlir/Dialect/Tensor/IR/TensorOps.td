@@ -1067,6 +1067,7 @@ def Tensor_ReshapeOp: Tensor_Op<"reshape", [
   }];
   let hasVerifier = 1;
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//
