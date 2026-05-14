@@ -706,10 +706,19 @@ void mlir::affine::getDependenceComponents(
     AffineForOp forOp, unsigned maxLoopDepth,
     std::vector<SmallVector<DependenceComponent, 2>> *depCompsVec) {
   // Collect all load and store ops in loop nest rooted at 'forOp'.
+  // Don't recurse into nested affine scopes (e.g. function-like ops or custom
+  // ops with AffineScope) — their induction variables are not common loops with
+  // the outer nest, so any dependence components they contribute would have
+  // fewer entries than maxLoopDepth and violate the invariant expected by
+  // callers.
   SmallVector<Operation *, 8> loadAndStoreOps;
-  forOp->walk([&](Operation *op) {
+  forOp->walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+    if (op->hasTrait<OpTrait::AffineScope>() &&
+        op != forOp.getOperation())
+      return WalkResult::skip();
     if (isa<AffineReadOpInterface, AffineWriteOpInterface>(op))
       loadAndStoreOps.push_back(op);
+    return WalkResult::advance();
   });
 
   unsigned numOps = loadAndStoreOps.size();
