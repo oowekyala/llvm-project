@@ -210,7 +210,8 @@ namespace PureVirtual {
 namespace Dtor {
   constexpr bool pseudo(bool read, bool recreate) {
     using T = bool;
-    bool b = false; // both-note {{lifetime has already ended}}
+    bool b = false; // both-note {{lifetime has already ended}} \
+                    // both-note {{declared here}}
     // This evaluates the store to 'b'...
     (b = true).~T();
     // ... and ends the lifetime of the object.
@@ -238,4 +239,18 @@ namespace GH150705 {
   constexpr B b;
   constexpr const A& a = b;
   constexpr auto x = (a.*q)(); // both-error {{constant expression}}
+}
+
+namespace DependentRequiresExpr {
+  template <class T,
+            bool = []() -> bool { // both-error {{not a constant expression}}
+              if (requires { T::type; })
+                return true;
+              return false;
+            }()>
+  struct p {
+    using type = void;
+  };
+
+  template <class T> using P = p<T>::type; // both-note {{while checking a default template argument}}
 }

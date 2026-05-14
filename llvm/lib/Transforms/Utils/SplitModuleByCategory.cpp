@@ -12,7 +12,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -21,7 +20,6 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <map>
-#include <string>
 #include <utility>
 
 using namespace llvm;
@@ -89,12 +87,6 @@ public:
 #endif
 };
 
-bool isKernel(const Function &F) {
-  return F.getCallingConv() == CallingConv::SPIR_KERNEL ||
-         F.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
-         F.getCallingConv() == CallingConv::PTX_Kernel;
-}
-
 // Represents "dependency" or "use" graph of global objects (functions and
 // global variables) in a module. It is used during code split to
 // understand which global variables and functions (other than entry points)
@@ -127,7 +119,7 @@ public:
         FuncTypeToFuncsMap;
     for (const Function &F : M.functions()) {
       // Kernels can't be called (either directly or indirectly).
-      if (isKernel(F))
+      if (F.hasKernelCallingConv())
         continue;
 
       FuncTypeToFuncsMap[F.getFunctionType()].insert(&F);

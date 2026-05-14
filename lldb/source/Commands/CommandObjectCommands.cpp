@@ -418,7 +418,7 @@ protected:
       if ((pos != std::string::npos) && (pos > 0))
         raw_command_string = raw_command_string.substr(pos);
     } else {
-      result.AppendError("Error parsing command string.  No alias created.");
+      result.AppendError("error parsing command string.  No alias created");
       return;
     }
 
@@ -482,9 +482,8 @@ protected:
 
     if (m_interpreter.AliasExists(alias_command) ||
         m_interpreter.UserCommandExists(alias_command)) {
-      result.AppendWarningWithFormat(
-          "Overwriting existing definition for '%s'.\n",
-          alias_command.str().c_str());
+      result.AppendWarningWithFormatv(
+          "overwriting existing definition for '{0}'", alias_command);
     }
     if (CommandAlias *alias = m_interpreter.AddAlias(
             alias_command, cmd_obj_sp, raw_command_string)) {
@@ -579,8 +578,8 @@ protected:
 
     if (m_interpreter.AliasExists(alias_command) ||
         m_interpreter.UserCommandExists(alias_command)) {
-      result.AppendWarningWithFormat(
-          "Overwriting existing definition for '%s'.\n", alias_command.c_str());
+      result.AppendWarningWithFormatv(
+          "overwriting existing definition for '{0}'", alias_command);
     }
 
     if (CommandAlias *alias = m_interpreter.AddAlias(
@@ -2037,7 +2036,8 @@ public:
     // option_element_vector:
 
     Options *options = GetOptions();
-    auto defs = options->GetDefinitions();
+    auto defs = options ? options->GetDefinitions()
+                        : llvm::ArrayRef<OptionDefinition>();
 
     std::unordered_set<size_t> option_slots;
     for (const auto &elem : option_vec) {
@@ -2888,7 +2888,7 @@ protected:
     size_t num_args = command.GetArgumentCount();
 
     if (num_args == 0) {
-      result.AppendError("No command was specified.");
+      result.AppendError("no command was specified");
       return;
     }
 

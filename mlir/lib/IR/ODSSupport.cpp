@@ -102,8 +102,7 @@ mlir::convertFromAttribute(bool &storage, Attribute attr,
                            function_ref<InFlightDiagnostic()> emitError) {
   auto valueAttr = dyn_cast<BoolAttr>(attr);
   if (!valueAttr)
-    return emitError()
-           << "expected string property to come from string attribute";
+    return emitError() << "expected BoolAttr for key `value`";
   storage = valueAttr.getValue();
   return success();
 }
@@ -112,7 +111,7 @@ Attribute mlir::convertToAttribute(MLIRContext *ctx, bool storage) {
 }
 
 template <typename DenseArrayTy, typename T>
-LogicalResult
+static LogicalResult
 convertDenseArrayFromAttr(MutableArrayRef<T> storage, Attribute attr,
                           function_ref<InFlightDiagnostic()> emitError,
                           StringRef denseArrayTyStr) {
@@ -143,7 +142,7 @@ mlir::convertFromAttribute(MutableArrayRef<int32_t> storage, Attribute attr,
 }
 
 template <typename DenseArrayTy, typename T>
-LogicalResult
+static LogicalResult
 convertDenseArrayFromAttr(SmallVectorImpl<T> &storage, Attribute attr,
                           function_ref<InFlightDiagnostic()> emitError,
                           StringRef denseArrayTyStr) {

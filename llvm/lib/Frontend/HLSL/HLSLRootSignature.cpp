@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Frontend/HLSL/HLSLRootSignature.h"
+#include "llvm/Support/DXILABI.h"
+#include "llvm/Support/InterleavedRange.h"
 #include "llvm/Support/ScopedPrinter.h"
 
 namespace llvm {
@@ -92,10 +94,9 @@ static raw_ostream &operator<<(raw_ostream &OS,
   return OS;
 }
 
-static raw_ostream &operator<<(raw_ostream &OS, const ClauseType &Type) {
-  OS << enumToStringRef(dxil::ResourceClass(llvm::to_underlying(Type)),
-                        dxbc::getResourceClasses());
-
+static raw_ostream &operator<<(raw_ostream &OS,
+                               const dxil::ResourceClass &Type) {
+  OS << dxil::getResourceClassName(Type);
   return OS;
 }
 
@@ -109,6 +110,13 @@ static raw_ostream &operator<<(raw_ostream &OS,
 static raw_ostream &operator<<(raw_ostream &OS,
                                const llvm::dxbc::DescriptorRangeFlags &Flags) {
   printFlags(OS, Flags, dxbc::getDescriptorRangeFlags());
+
+  return OS;
+}
+
+static raw_ostream &operator<<(raw_ostream &OS,
+                               const llvm::dxbc::StaticSamplerFlags &Flags) {
+  printFlags(OS, Flags, dxbc::getStaticSamplerFlags());
 
   return OS;
 }
@@ -153,8 +161,7 @@ raw_ostream &operator<<(raw_ostream &OS, const DescriptorTableClause &Clause) {
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const RootDescriptor &Descriptor) {
-  ClauseType Type = ClauseType(llvm::to_underlying(Descriptor.Type));
-  OS << "Root" << Type << "(" << Descriptor.Reg
+  OS << "Root" << Descriptor.Type << "(" << Descriptor.Reg
      << ", space = " << Descriptor.Space
      << ", visibility = " << Descriptor.Visibility
      << ", flags = " << Descriptor.Flags << ")";
@@ -173,7 +180,7 @@ raw_ostream &operator<<(raw_ostream &OS, const StaticSampler &Sampler) {
      << ", borderColor = " << Sampler.BorderColor
      << ", minLOD = " << Sampler.MinLOD << ", maxLOD = " << Sampler.MaxLOD
      << ", space = " << Sampler.Space << ", visibility = " << Sampler.Visibility
-     << ")";
+     << ", flags = " << Sampler.Flags << ")";
   return OS;
 }
 
@@ -202,15 +209,7 @@ raw_ostream &operator<<(raw_ostream &OS, const RootElement &Element) {
 }
 
 void dumpRootElements(raw_ostream &OS, ArrayRef<RootElement> Elements) {
-  OS << " RootElements{";
-  bool First = true;
-  for (const RootElement &Element : Elements) {
-    if (!First)
-      OS << ",";
-    OS << " " << Element;
-    First = false;
-  }
-  OS << "}";
+  OS << " RootElements" << interleaved(Elements, ", ", "{", "}");
 }
 
 } // namespace rootsig

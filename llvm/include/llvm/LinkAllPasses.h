@@ -38,6 +38,7 @@
 #include "llvm/Support/Valgrind.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar.h"
@@ -84,6 +85,7 @@ struct ForcePassLinking {
     (void)llvm::createDomOnlyViewerWrapperPassPass();
     (void)llvm::createDomViewerWrapperPassPass();
     (void)llvm::createAlwaysInlinerLegacyPass();
+    (void)llvm::createGlobalDCEPass();
     (void)llvm::createGlobalMergeFuncPass();
     (void)llvm::createGlobalsAAWrapperPass();
     (void)llvm::createInstSimplifyLegacyPass();
@@ -125,9 +127,6 @@ struct ForcePassLinking {
     (void)llvm::createEarlyCSEPass();
     (void)llvm::createGVNPass();
     (void)llvm::createPostDomTree();
-    (void)llvm::createMergeICmpsLegacyPass();
-    (void)llvm::createExpandLargeDivRemPass();
-    (void)llvm::createExpandMemCmpLegacyPass();
     std::string buf;
     llvm::raw_string_ostream os(buf);
     (void)llvm::createPrintModulePass(os);

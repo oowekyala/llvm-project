@@ -25,3 +25,37 @@ add_integration_test(
   DEPENDS
     libc.src.__support.threads.thread
 )
+
+add_integration_test(
+  main_exit_test
+  SUITE
+    libc-support-threads-integration-tests
+  SRCS
+    main_exit_test.cpp
+  DEPENDS
+    libc.src.__support.threads.thread
+)
+
+add_integration_test(
+  double_exit_test
+  SUITE
+    libc-support-threads-integration-tests
+  SRCS
+    double_exit_test.cpp
+  DEPENDS
+    libc.src.__support.threads.thread
+    libc.src.stdlib.exit
+)
+
+add_integration_test(
+  futex_requeue_test
+  SUITE
+    libc-support-threads-integration-tests
+  SRCS
+    futex_requeue_test.cpp
+  DEPENDS
+    libc.hdr.errno_macros
+    libc.include.pthread
+    libc.src.pthread.pthread_create
+    libc.src.pthread.pthread_join
+)
