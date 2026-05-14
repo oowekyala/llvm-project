@@ -8,15 +8,20 @@
 
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotModuleBufferize.h"
 #include "mlir/Dialect/Bufferization/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/SubsetOpInterface.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
 namespace bufferization {
@@ -120,6 +125,19 @@ Value mlir::bufferization::buildSubsetExtraction(RewriterBase &rewriter,
   return replacement;
 }
 
+static bool
+isEquivalentModuloLayoutPreservingTypeChange(OpOperand *opnd,
+                                             const AnalysisState &state) {
+  auto *owner = opnd->getOwner();
+  return isa<CastOpInterface>(owner) || isa<tensor::CollapseShapeOp>(owner) ||
+         isa<tensor::ExpandShapeOp>(owner) ||
+         llvm::all_of(state.getAliasingValues(*opnd), [&](auto alias) {
+           return alias.relation == BufferRelation::Equivalent &&
+                  alias.isDefinite &&
+                  alias.value.getType() == opnd->get().getType();
+         });
+}
+
 LogicalResult mlir::bufferization::eliminateEmptyTensors(
     RewriterBase &rewriter, Operation *op, OneShotAnalysisState &state,
     ControlBuildSubsetExtractionFn subsetsExtractionFn) {
@@ -139,14 +157,11 @@ LogicalResult mlir::bufferization::eliminateEmptyTensors(
     TraversalConfig config;
     config.followEquivalentOnly = true;
     config.alwaysIncludeLeaves = false;
-    // Replace only if the types match or are static <-> dynamic casts. We do
-    // not support slices or reshapes.
-    // TODO: This could be extended to support IR such as:
-    // %0 = tensor.empty() : tensor<128xf32>
-    // %1 = "some_op"(%0) : (tensor<128xf32>) -> (tensor<128xf32>)
-    // %2 = tensor.expand_shape %1 ...
-    // %3 = tensor.insert_slice %2 into ...
-    config.followSameTypeOrCastsOnly = true;
+    // Allow crossing reassociative reshape ops (CollapseShapeOp/ExpandShapeOp)
+    // which report BufferRelation::Equivalent. The replacement building below
+    // wraps the extract_slice in the inverse reshape to recover the empty's
+    // original type. followEquivalentOnly guards against following non-reshape
+    // type changes (e.g. extract_slice which is Unknown, not Equivalent).
     SetVector<Value> emptyTensors = state.findValueInReverseUseDefChain(
         &source, /*condition=*/
         [&](Value val) { return val.getDefiningOp<tensor::EmptyOp>(); }, config,
@@ -170,17 +185,53 @@ LogicalResult mlir::bufferization::eliminateEmptyTensors(
       if (emptyTensorOp == replacement.getDefiningOp())
         continue;
       if (replacement.getType() != v.getType()) {
-        if (cast<ShapedType>(replacement.getType()).getElementType() !=
-            cast<ShapedType>(v.getType()).getElementType())
+        // - srcShaped is the type of the subview
+        // - dstShaped is the type of the tensor.empty that we're replacing
+        auto srcShaped = cast<ShapedType>(replacement.getType());
+        auto dstShaped = cast<ShapedType>(v.getType());
+        if (srcShaped.getElementType() != dstShaped.getElementType())
           continue;
+
+        // We need to make sure that the path from the empty tensor to the
+        // subset insertion preserved the layout of the empty tensor. This
+        // means each operation on the path should either have same type for
+        // the operand and equivalent result, or be one of the known
+        // layout-preserving ops (cast and reassociative reshapes).
+        if (llvm::any_of(visitedOpOperands, [&](auto *opnd) {
+              return !isEquivalentModuloLayoutPreservingTypeChange(opnd, state);
+            }))
+          continue;
+
         rewriter.setInsertionPointAfterValue(replacement);
-        replacement = tensor::CastOp::create(rewriter, v.getLoc(), v.getType(),
-                                             replacement);
+        if (tensor::CastOp::areCastCompatible(srcShaped, dstShaped)) {
+          // Same rank and compatible - a cast is likely what we need.
+          replacement = tensor::CastOp::create(rewriter, v.getLoc(),
+                                               v.getType(), replacement);
+        } else {
+          // Not cast-compatible (different rank or incompatible shapes).
+          // Emit a tensor.reshape. May be canonicalized later to tensor.expand/collapse_shape.
+          SmallVector<Value> shapeVals;
+          unsigned dynIdx = 0;
+          for (int64_t dim : dstShaped.getShape()) {
+            if (ShapedType::isDynamic(dim)) {
+              shapeVals.push_back(emptyTensorOp.getDynamicSizes()[dynIdx++]);
+            } else {
+              shapeVals.push_back(
+                  arith::ConstantIndexOp::create(rewriter, v.getLoc(), dim));
+            }
+          }
+          auto shapeType =
+              RankedTensorType::get({static_cast<int64_t>(dstShaped.getRank())},
+                                    rewriter.getIndexType());
+          Value shape = tensor::FromElementsOp::create(rewriter, v.getLoc(),
+                                                       shapeType, shapeVals);
+          replacement = tensor::ReshapeOp::create(
+              rewriter, v.getLoc(), dstShaped, replacement, shape);
+        }
       }
       // Replace the specific use of the tensor::EmptyOp.
-      rewriter.modifyOpInPlace(user, [&]() {
-        user->setOperand(useToBeReplaced->getOperandNumber(), replacement);
-      });
+      rewriter.modifyOpInPlace(user,
+                               [&]() { useToBeReplaced->assign(replacement); });
       state.resetCache();
     }
 
@@ -199,8 +250,8 @@ struct EmptyTensorElimination
   void runOnOperation() override;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry
-        .insert<bufferization::BufferizationDialect, tensor::TensorDialect>();
+    registry.insert<arith::ArithDialect, bufferization::BufferizationDialect,
+                    tensor::TensorDialect>();
   }
 };
 } // namespace
