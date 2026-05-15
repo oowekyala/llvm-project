@@ -1909,8 +1909,7 @@ OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
 /// Greedily build a reassociation that partitions \p more dims into groups
 /// whose products match the corresponding \p fewer dim. Returns false if no
 /// valid partition exists (e.g. when a split would cross a dimension boundary).
-static bool buildReassociation(ArrayRef<int64_t> fewer,
-                               ArrayRef<int64_t> more,
+static bool buildReassociation(ArrayRef<int64_t> fewer, ArrayRef<int64_t> more,
                                SmallVectorImpl<ReassociationIndices> &reassoc) {
   reassoc.clear();
   int moreIdx = 0;
@@ -1956,8 +1955,8 @@ struct FoldReshapeIntoReassociativeReshape : OpRewritePattern<ReshapeOp> {
     if (srcRank > dstRank) {
       if (!buildReassociation(dstType.getShape(), srcType.getShape(), reassoc))
         return failure();
-      rewriter.replaceOpWithNewOp<CollapseShapeOp>(op, dstType,
-                                                   op.getSource(), reassoc);
+      rewriter.replaceOpWithNewOp<CollapseShapeOp>(op, dstType, op.getSource(),
+                                                   reassoc);
     } else {
       if (!buildReassociation(srcType.getShape(), dstType.getShape(), reassoc))
         return failure();
@@ -2353,6 +2352,100 @@ struct ConvertToStaticExpandShape : public OpRewritePattern<ExpandShapeOp> {
     return success();
   }
 };
+
+/// Build a shape tensor for the result of collapsing a reshape
+/// with a subsequent collapse_shape. This may need to compute
+/// the product of dynamic dimensions but should be folded away
+/// in the static case.
+static Value applyCollapseReassocToShapeTensor(
+    PatternRewriter &rewriter, Location loc, Value intermediateShapeTensor,
+    ArrayRef<ReassociationIndices> reassoc, RankedTensorType resultType) {
+  SmallVector<Value> shapeVals;
+  for (auto [outDim, group] : llvm::enumerate(reassoc)) {
+    int64_t staticSize = resultType.getDimSize(outDim);
+    if (ShapedType::isStatic(staticSize)) {
+      shapeVals.push_back(
+          arith::ConstantIndexOp::create(rewriter, loc, staticSize));
+      continue;
+    }
+    // Dynamic output dim: product of the intermediate dims in this group.
+    Value product;
+    for (int64_t inDim : group) {
+      Value idx = arith::ConstantIndexOp::create(rewriter, loc, inDim);
+      Value dimVal =
+          rewriter.createOrFold<ExtractOp>(loc, intermediateShapeTensor, idx);
+
+      product = product
+                    ? rewriter.createOrFold<arith::MulIOp>(loc, product, dimVal)
+                    : dimVal;
+    }
+    shapeVals.push_back(product);
+  }
+  auto shapeType = RankedTensorType::get(
+      {static_cast<int64_t>(resultType.getRank())}, rewriter.getIndexType());
+  return tensor::FromElementsOp::create(rewriter, loc, shapeType, shapeVals)
+      .getResult();
+}
+
+// Fold CollapseShapeOp into ReshapeOp:
+//   collapse_shape(reshape(src, shape), reassoc) -> reshape(src, new_shape)
+struct FoldCollapseOfReshapeOp : public OpRewritePattern<CollapseShapeOp> {
+  using Base::Base;
+
+  LogicalResult matchAndRewrite(CollapseShapeOp collapseShapeOp,
+                                PatternRewriter &rewriter) const override {
+    auto reshapeOp =
+        collapseShapeOp.getSrc().getDefiningOp<tensor::ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+    Value newShape = applyCollapseReassocToShapeTensor(
+        rewriter, collapseShapeOp.getLoc(), reshapeOp.getShape(),
+        collapseShapeOp.getReassociationIndices(),
+        collapseShapeOp.getResultType());
+    rewriter.replaceOpWithNewOp<tensor::ReshapeOp>(
+        collapseShapeOp, collapseShapeOp.getResultType(), reshapeOp.getSource(),
+        newShape);
+    return success();
+  }
+};
+
+// Fold ExpandShapeOp into ReshapeOp:
+//   expand_shape(reshape(src, shape), reassoc) -> reshape(src, new_shape)
+//
+// The new shape tensor is built from the expand_shape's output shape: static
+// dimensions are emitted as constants; dynamic dimensions are taken from the
+// expand_shape's dynamic output-shape operands.
+struct FoldExpandOfReshapeOp : public OpRewritePattern<ExpandShapeOp> {
+  using Base::Base;
+
+  LogicalResult matchAndRewrite(ExpandShapeOp expandShapeOp,
+                                PatternRewriter &rewriter) const override {
+    auto reshapeOp = expandShapeOp.getSrc().getDefiningOp<tensor::ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+    auto resultType = expandShapeOp.getResultType();
+    Location loc = expandShapeOp.getLoc();
+    SmallVector<Value> shapeVals;
+    for (auto [outDim, ofr] :
+         llvm::enumerate(expandShapeOp.getMixedOutputShape())) {
+      int64_t staticSize = resultType.getDimSize(outDim);
+      if (ShapedType::isStatic(staticSize))
+        shapeVals.push_back(
+            arith::ConstantIndexOp::create(rewriter, loc, staticSize));
+      else
+        shapeVals.push_back(
+            getValueOrCreateConstantIndexOp(rewriter, loc, ofr));
+    }
+    auto shapeType = RankedTensorType::get(
+        {static_cast<int64_t>(resultType.getRank())}, rewriter.getIndexType());
+    Value newShape =
+        tensor::FromElementsOp::create(rewriter, loc, shapeType, shapeVals)
+            .getResult();
+    rewriter.replaceOpWithNewOp<tensor::ReshapeOp>(
+        expandShapeOp, resultType, reshapeOp.getSource(), newShape);
+    return success();
+  }
+};
 } // namespace
 
 void ExpandShapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
@@ -2362,7 +2455,8 @@ void ExpandShapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
       ComposeExpandOfCollapseOp<ExpandShapeOp, CollapseShapeOp, CastOp>,
       ConvertToStaticExpandShape, FoldReshapeWithConstant<ExpandShapeOp>,
       FoldReshapeWithSplat<ExpandShapeOp>,
-      FoldReshapeWithFromElements<ExpandShapeOp>>(context);
+      FoldReshapeWithFromElements<ExpandShapeOp>, FoldExpandOfReshapeOp>(
+      context);
 }
 
 void CollapseShapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
@@ -2373,8 +2467,8 @@ void CollapseShapeOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                 tensor::DimOp, RankedTensorType>,
       FoldReshapeWithConstant<CollapseShapeOp>,
       FoldReshapeWithSplat<CollapseShapeOp>,
-      FoldReshapeWithFromElements<CollapseShapeOp>, FoldCollapseOfCastOp>(
-      context);
+      FoldReshapeWithFromElements<CollapseShapeOp>, FoldCollapseOfCastOp,
+      FoldCollapseOfReshapeOp>(context);
 }
 
 OpFoldResult ExpandShapeOp::fold(FoldAdaptor adaptor) {
