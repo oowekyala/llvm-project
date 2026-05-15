@@ -14,6 +14,7 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpDefinition.h"
@@ -29,6 +30,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/Support/LogicalResult.h"
 
 using namespace mlir;
 using namespace mlir::memref;
@@ -1839,7 +1841,8 @@ GetGlobalOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
 OpFoldResult LoadOp::fold(FoldAdaptor adaptor) {
 
-  if (auto getCst = mlir::dyn_cast_or_null<GetGlobalOp>(getMemref().getDefiningOp())) {
+  if (auto getCst =
+          mlir::dyn_cast_or_null<GetGlobalOp>(getMemref().getDefiningOp())) {
     auto global = mlir::dyn_cast_or_null<GlobalOp>(
         SymbolTable::lookupNearestSymbolFrom(getCst, getCst.getNameAttr()));
     if (global && global.getConstant() && global.getInitialValue()) {
@@ -3094,6 +3097,14 @@ LogicalResult ReshapeOp::verify() {
 FailureOr<std::optional<SmallVector<Value>>>
 ReshapeOp::bubbleDownCasts(OpBuilder &builder) {
   return bubbleDownCastsPassthroughOpImpl(*this, builder, getSourceMutable());
+}
+
+OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
+  if (cast<ShapedType>(getSource().getType()).hasStaticShape() &&
+      getSource().getType() == getResult().getType()) {
+    return adaptor.getSource();
+  }
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
