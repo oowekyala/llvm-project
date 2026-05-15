@@ -11,10 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/TensorToLinalg/TensorToLinalg.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "llvm/Support/LogicalResult.h"
 
 #define DEBUG_TYPE "tensor-to-linalg-pattern"
 

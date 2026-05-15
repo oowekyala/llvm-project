@@ -23,6 +23,13 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/STLExtras.h"
 
+namespace mlir {
+namespace bufferization {
+#define GEN_PASS_DEF_EMPTYTENSORELIMINATIONPASS
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h.inc"
+} // namespace bufferization
+} // namespace mlir
+
 using namespace mlir;
 using namespace mlir::bufferization;
 
@@ -234,6 +241,21 @@ LogicalResult mlir::bufferization::eliminateEmptyTensors(
   return success();
 }
 
+namespace {
+struct EmptyTensorElimination
+    : public bufferization::impl::EmptyTensorEliminationPassBase<
+          EmptyTensorElimination> {
+  using Base::Base;
+
+  void runOnOperation() override;
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry
+        .insert<bufferization::BufferizationDialect, tensor::TensorDialect>();
+  }
+};
+} // namespace
+
 LogicalResult mlir::bufferization::eliminateEmptyTensors(RewriterBase &rewriter,
                                                          Operation *op) {
   auto moduleOp = dyn_cast<ModuleOp>(op);
@@ -254,4 +276,10 @@ LogicalResult mlir::bufferization::eliminateEmptyTensors(RewriterBase &rewriter,
   }
 
   return bufferization::eliminateEmptyTensors(rewriter, op, state);
+}
+
+void EmptyTensorElimination::runOnOperation() {
+  IRRewriter rewriter(getOperation()->getContext());
+  if (failed(bufferization::eliminateEmptyTensors(rewriter, getOperation())))
+    signalPassFailure();
 }
