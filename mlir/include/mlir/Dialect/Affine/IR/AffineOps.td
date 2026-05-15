@@ -340,6 +340,7 @@ def AffineForOp : Affine_Op<"for",
 
   let hasCustomAssemblyFormat = 1;
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
   let hasRegionVerifier = 1;
 }
 

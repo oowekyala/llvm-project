@@ -2655,6 +2655,12 @@ static bool hasTrivialZeroTripCount(AffineForOp op) {
   return getTrivialConstantTripCount(op) == 0;
 }
 
+void AffineForOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                              MLIRContext *context) {
+  populateRegionBranchOpInterfaceCanonicalizationPatterns(
+      results, AffineForOp::getOperationName());
+}
+
 LogicalResult AffineForOp::fold(FoldAdaptor adaptor,
                                 SmallVectorImpl<OpFoldResult> &results) {
   bool folded = succeeded(foldLoopBounds(*this));

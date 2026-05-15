@@ -9,8 +9,10 @@
 #include <map>
 #include <utility>
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
@@ -799,6 +801,40 @@ static llvm::EquivalenceClasses<Value> computeTiedSuccessorInputs(
   return tiedSuccessorInputs;
 }
 
+static void
+updateOperandSegmentSize(Operation *op,
+                         function_ref<void(SmallVectorImpl<int> &)> update) {
+
+  auto attrName =
+      OpTrait::AttrSizedOperandSegments<void>::getOperandSegmentSizeAttr();
+
+  auto segments = cast<DenseI32ArrayAttr>(*op->getInherentAttr(attrName));
+
+  SmallVector<int> newSegments(segments.asArrayRef());
+  update(newSegments);
+
+  op->setInherentAttr(StringAttr::get(op->getContext(), attrName),
+                      DenseI32ArrayAttr::get(op->getContext(), newSegments));
+}
+
+static void deleteInOperandSegmentSizes(Operation *op,
+                                        const llvm::BitVector &indices) {
+
+  updateOperandSegmentSize(op, [&](auto &newSegments) {
+    auto indexItr = indices.find_first();
+    int baseIdx = 0;
+    for (auto &segmentSize : newSegments) {
+      int accumulated = 0;
+      while (indexItr != -1 && indexItr < baseIdx + segmentSize) {
+        accumulated++;
+        indexItr = indices.find_next(indexItr);
+      }
+      baseIdx += segmentSize;
+      segmentSize -= accumulated;
+    }
+  });
+}
+
 /// Remove dead successor inputs from region branch ops. A successor input is
 /// dead if it has no uses. Successor inputs come in sets of tied values: if
 /// you remove one value from a set, you must remove all values from the set.
@@ -923,7 +959,14 @@ struct RemoveDeadRegionBranchOpSuccessorInputs : public RewritePattern {
     for (auto &pair : operandsToRemove) {
       Operation *op = pair.first;
       BitVector &operands = pair.second;
-      rewriter.modifyOpInPlace(op, [&]() { op->eraseOperands(operands); });
+      rewriter.modifyOpInPlace(op, [&]() {
+        if (op->hasTrait<OpTrait::AttrSizedOperandSegments>()) {
+          // then when erasing operands we also need to update the operand
+          // segment size.
+          deleteInOperandSegmentSizes(op, operands);
+        }
+        op->eraseOperands(operands);
+      });
     }
 
     // Erase block arguments.

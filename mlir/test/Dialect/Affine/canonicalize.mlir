@@ -1407,6 +1407,20 @@ func.func @no_simplify_min_max(%M: index) {
 }
 
 // -----
+// CHECK-LABEL: func @simplify_iter_args
+// CHECK-SAME: (%[[arg0:.*]]: index) -> index
+func.func @simplify_iter_args(%M: index) -> index {
+  // CHECK: affine.for %{{.*}} = 0 to 4 {
+  %x = affine.for %i = 0 to 4 iter_args(%a = %M) -> index {
+    "test.foo"() : () -> ()
+    affine.yield %a : index
+  }
+
+  // CHECK: return %[[arg0]]
+  return %x : index
+}
+
+// -----
 
 //           CHECK: #[[$map:.*]] = affine_map<()[s0] -> (s0 * ((-s0 + 40961) ceildiv 512))>
 // CHECK-BOTTOM-UP: #[[$map:.*]] = affine_map<()[s0] -> (s0 * ((-s0 + 40961) ceildiv 512))>
