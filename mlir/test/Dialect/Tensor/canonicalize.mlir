@@ -2641,8 +2641,157 @@ func.func @partial_sink_expand_of_cast(%arg0 : tensor<10x10xf32>, %arg1 : index,
 // CHECK-LABEL:  func.func @partial_sink_expand_of_cast
 //       CHECK:   %[[CAST:.+]] = tensor.cast
 //  CHECK-SAME:     tensor<10x10xf32> to tensor<?x10xf32>
-//       CHECK:   %[[EXPAND:.+]] = tensor.expand_shape %{{.*}} {{\[}}[0, 1], [2]] 
+//       CHECK:   %[[EXPAND:.+]] = tensor.expand_shape %{{.*}} {{\[}}[0, 1], [2]]
 //  CHECK-SAME:     output_shape [%{{.*}}, %{{.*}}, 10]
 //       CHECK:   %[[RES:.+]] = tensor.cast %[[EXPAND]]
 //  CHECK-SAME:     tensor<?x?x10xf32> to tensor<?x?x?xf32>
 //       CHECK:   return %[[RES]]
+
+// -----
+
+// Flatten reshape (2x8 -> 16) becomes collapse_shape [[0, 1]].
+// CHECK-LABEL: @reshape_to_collapse_2d
+// CHECK-SAME:    %[[A:.+]]: tensor<2x8xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.collapse_shape %[[A]] {{\[\[}}0, 1]]
+func.func @reshape_to_collapse_2d(%arg0: tensor<2x8xi32>) -> tensor<16xi32> {
+  %shape = arith.constant dense<16> : tensor<1xi64>
+  %flat = tensor.reshape %arg0(%shape) : (tensor<2x8xi32>, tensor<1xi64>) -> tensor<16xi32>
+  return %flat : tensor<16xi32>
+}
+
+// -----
+
+// Structuring reshape (4 -> 2x2) becomes expand_shape [[0, 1]].
+// CHECK-LABEL: @reshape_to_expand_1d
+// CHECK-SAME:    %[[A:.+]]: tensor<4xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.expand_shape %[[A]] {{\[\[}}0, 1]]
+func.func @reshape_to_expand_1d(%arg0: tensor<4xi32>) -> tensor<2x2xi32> {
+  %shape = arith.constant dense<[2, 2]> : tensor<2xi64>
+  %chunk = tensor.reshape %arg0(%shape) : (tensor<4xi32>, tensor<2xi64>) -> tensor<2x2xi32>
+  return %chunk : tensor<2x2xi32>
+}
+
+// -----
+
+// Partial collapse: 2x3x4 -> 6x4 becomes collapse_shape [[0, 1], [2]].
+// CHECK-LABEL: @reshape_to_collapse_partial
+// CHECK-SAME:    %[[A:.+]]: tensor<2x3x4xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.collapse_shape %[[A]] {{\[\[}}0, 1], [2]]
+func.func @reshape_to_collapse_partial(%arg0: tensor<2x3x4xi32>) -> tensor<6x4xi32> {
+  %shape = arith.constant dense<[6, 4]> : tensor<2xi64>
+  %flat = tensor.reshape %arg0(%shape) : (tensor<2x3x4xi32>, tensor<2xi64>) -> tensor<6x4xi32>
+  return %flat : tensor<6x4xi32>
+}
+
+// -----
+
+// Cross-boundary reshape (4x6 -> 3x8) cannot be expressed as a single
+// collapse or expand — must remain a tensor.reshape.
+// CHECK-LABEL: @reshape_no_fold_cross_boundary
+// CHECK:         tensor.reshape
+func.func @reshape_no_fold_cross_boundary(%arg0: tensor<4x6xi32>) -> tensor<3x8xi32> {
+  %shape = arith.constant dense<[3, 8]> : tensor<2xi64>
+  %r = tensor.reshape %arg0(%shape) : (tensor<4x6xi32>, tensor<2xi64>) -> tensor<3x8xi32>
+  return %r : tensor<3x8xi32>
+}
+
+// -----
+
+// Dynamic dims must not be folded.
+// CHECK-LABEL: @reshape_no_fold_dynamic
+// CHECK:         tensor.reshape
+func.func @reshape_no_fold_dynamic(%arg0: tensor<?x8xi32>, %n: index) -> tensor<?xi32> {
+  %shape = tensor.from_elements %n : tensor<1xindex>
+  %flat = tensor.reshape %arg0(%shape) : (tensor<?x8xi32>, tensor<1xindex>) -> tensor<?xi32>
+  return %flat : tensor<?xi32>
+}
+
+// -----
+
+// Full chain: reshape(2x8->16) + extract_slice + reshape(4->2x2) canonicalizes
+// to collapse_shape + extract_slice + expand_shape with no intermediate copy.
+// CHECK-LABEL: @reshape_slice_reshape_chain
+// CHECK-SAME:    %[[A:.+]]: tensor<2x8xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         %[[FLAT:.+]] = tensor.collapse_shape %[[A]] {{\[\[}}0, 1]]
+// CHECK:         tensor.extract_slice %[[FLAT]]
+// CHECK:         tensor.expand_shape %{{.*}} {{\[\[}}0, 1]]
+func.func @reshape_slice_reshape_chain(%arg0: tensor<2x8xi32>, %i: index) -> tensor<2x2xi32> {
+  %shape_1d = arith.constant dense<16>     : tensor<1xi64>
+  %shape_2d = arith.constant dense<[2, 2]> : tensor<2xi64>
+  %flat  = tensor.reshape %arg0(%shape_1d) : (tensor<2x8xi32>, tensor<1xi64>) -> tensor<16xi32>
+  %slice = tensor.extract_slice %flat[%i][4][1] : tensor<16xi32> to tensor<4xi32>
+  %chunk = tensor.reshape %slice(%shape_2d) : (tensor<4xi32>, tensor<2xi64>) -> tensor<2x2xi32>
+  return %chunk : tensor<2x2xi32>
+}
+
+// -----
+
+// collapse_shape(reshape(src)) folds to a single reshape, which then becomes
+// collapse_shape because the shapes are reassociation-compatible.
+// CHECK-LABEL: @fold_collapse_of_reshape
+// CHECK-SAME:    %[[A:.+]]: tensor<6x4xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.collapse_shape %[[A]] {{\[\[}}0, 1]]
+func.func @fold_collapse_of_reshape(%arg0: tensor<6x4xi32>) -> tensor<24xi32> {
+  %shape = arith.constant dense<[8, 3]> : tensor<2xi64>
+  %r = tensor.reshape %arg0(%shape) : (tensor<6x4xi32>, tensor<2xi64>) -> tensor<8x3xi32>
+  %c = tensor.collapse_shape %r [[0, 1]] : tensor<8x3xi32> into tensor<24xi32>
+  return %c : tensor<24xi32>
+}
+
+// -----
+
+// expand_shape(reshape(src)) folds to a single reshape, which then becomes
+// expand_shape because the shapes are reassociation-compatible.
+// CHECK-LABEL: @fold_expand_of_reshape
+// CHECK-SAME:    %[[A:.+]]: tensor<24xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.expand_shape %[[A]] {{\[\[}}0, 1, 2]] output_shape [2, 3, 4]
+func.func @fold_expand_of_reshape(%arg0: tensor<24xi32>) -> tensor<2x3x4xi32> {
+  %shape = arith.constant dense<[6, 4]> : tensor<2xi64>
+  %r = tensor.reshape %arg0(%shape) : (tensor<24xi32>, tensor<2xi64>) -> tensor<6x4xi32>
+  %e = tensor.expand_shape %r [[0, 1], [2]] output_shape [2, 3, 4]
+         : tensor<6x4xi32> into tensor<2x3x4xi32>
+  return %e : tensor<2x3x4xi32>
+}
+
+// -----
+
+// expand_shape(collapse_shape(reshape(src))) folds step-by-step: first the
+// collapse absorbs the reshape, then the expand absorbs the resulting reshape,
+// leaving a single expand_shape directly on src.
+// CHECK-LABEL: @fold_expand_of_collapse_of_reshape
+// CHECK-SAME:    %[[A:.+]]: tensor<2x12xi32>
+// CHECK-NOT:     tensor.reshape
+// CHECK:         tensor.expand_shape %[[A]] {{\[\[}}0], [1, 2]] output_shape [2, 4, 3]
+func.func @fold_expand_of_collapse_of_reshape(%arg0: tensor<2x12xi32>) -> tensor<2x4x3xi32> {
+  %shape = arith.constant dense<[4, 6]> : tensor<2xi64>
+  %r = tensor.reshape %arg0(%shape) : (tensor<2x12xi32>, tensor<2xi64>) -> tensor<4x6xi32>
+  %c = tensor.collapse_shape %r [[0, 1]] : tensor<4x6xi32> into tensor<24xi32>
+  %e = tensor.expand_shape %c [[0, 1, 2]] output_shape [2, 4, 3]
+         : tensor<24xi32> into tensor<2x4x3xi32>
+  return %e : tensor<2x4x3xi32>
+}
+
+// -----
+
+// collapse_shape(reshape(src)) with a dynamic output dim: the pattern extracts
+// the dynamic intermediate dim from the reshape's shape tensor and multiplies
+// it by the static factor. The resulting reshape is then an identity (same type,
+// rank 1) and folds away, returning src directly.
+// CHECK-LABEL: @fold_collapse_of_reshape_dynamic
+// CHECK-SAME:    %[[A:.+]]: tensor<?xi32>
+// CHECK-NOT:     tensor.collapse_shape
+// CHECK-NOT:     tensor.reshape
+// CHECK:         return %[[A]]
+func.func @fold_collapse_of_reshape_dynamic(%arg0: tensor<?xi32>, %n: index) -> tensor<?xi32> {
+  %c8 = arith.constant 8 : index
+  %shape = tensor.from_elements %n, %c8 : tensor<2xindex>
+  %r = tensor.reshape %arg0(%shape) : (tensor<?xi32>, tensor<2xindex>) -> tensor<?x8xi32>
+  %c = tensor.collapse_shape %r [[0, 1]] : tensor<?x8xi32> into tensor<?xi32>
+  return %c : tensor<?xi32>
+}
