@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -2667,6 +2668,23 @@ void AffineForOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
   populateRegionBranchOpInterfaceCanonicalizationPatterns(
       results, AffineForOp::getOperationName());
+  populateRegionBranchOpInterfaceInliningPattern(
+      results, AffineForOp::getOperationName(),
+      /*replBuilderFn=*/
+      [](OpBuilder &builder, Location loc, Value value) -> Value {
+        // affine.for has only one non-successor input value: the loop induction
+        // variable. In case of a single acyclic path through the op, the IV can
+        // be safely replaced with the lower bound.
+        auto blockArg = cast<BlockArgument>(value);
+        assert(blockArg.getArgNumber() == 0 && "expected induction variable");
+        auto forOp = cast<AffineForOp>(blockArg.getOwner()->getParentOp());
+        if (forOp.hasConstantLowerBound()) {
+          return arith::ConstantIndexOp::create(builder, loc,
+                                                forOp.getConstantLowerBound());
+        }
+        return AffineApplyOp::create(builder, loc, forOp.getLowerBoundMapAttr(),
+                                     forOp.getLowerBoundOperands());
+      });
 }
 
 LogicalResult AffineForOp::fold(FoldAdaptor adaptor,
