@@ -1040,6 +1040,15 @@ static bool findReductionVariablesAndRewrite(
   }
   if (result.empty())
     return false;
+  // Reject if any two pairs share the same load MemRefAccess. This happens
+  // when store-to-load forwarding hasn't run yet and the same accumulator
+  // location is loaded/stored multiple times per iteration. The transformation
+  // is only sound when each memory location has exactly one (load, store) pair.
+  for (size_t i = 0; i < result.size(); ++i)
+    for (size_t j = i + 1; j < result.size(); ++j)
+      if (MemRefAccess(result[i].first) == MemRefAccess(result[j].first))
+        return false;
+
   SmallVector<Value> newInitOperands;
   SmallVector<Value> newYieldOperands;
   IRRewriter rewriter(loop->getContext());
@@ -1069,7 +1078,18 @@ static bool findReductionVariablesAndRewrite(
        llvm::zip(result, rewritten->getRegionIterArgs().drop_front(numResults),
                  rewritten->getLoopResults()->drop_front(numResults))) {
     auto load = loadStore.first;
-    rewriter.replaceOp(load, bbArg);
+    // Avoid iterating load->result's use-list directly: replaceWithAdditionalYields
+    // may have grown the yield's OperandStorage (realloc + move), which rebuilds
+    // the use-chain and can leave stale back-pointers that crash removeFromCurrent.
+    // Instead, walk the loop body ops and patch operands in place.
+    Value loadResult = load->getResult(0);
+    for (Operation &bodyOp : newLoop.getLoopRegions()[0]->front()) {
+      for (OpOperand &operand : bodyOp.getOpOperands()) {
+        if (operand.get() == loadResult)
+          operand.set(bbArg);
+      }
+    }
+    rewriter.eraseOp(load);
 
     auto store = loadStore.second;
     rewriter.moveOpAfter(store, next);

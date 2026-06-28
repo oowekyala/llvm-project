@@ -1069,3 +1069,33 @@ func.func @vector_store_dead_elim_same_type(%arg0: memref<20x1xi64>) {
   affine.vector_store %cst2, %arg0[%c0, %c0] : memref<20x1xi64>, vector<5xi64>
   return
 }
+
+// CHECK-LABEL: func @reduction_duplicate_access_no_iter_arg
+// When the same memref location appears in multiple load/store pairs within a
+// single loop, store-to-load forwarding hasn't run yet and the loop must NOT be
+// rewritten to use iter_args — doing so would crash. Verify the loop is left
+// unchanged (no iter_args).
+func.func @reduction_duplicate_access_no_iter_arg(%x : memref<10xf32>) -> f32 {
+  %b = memref.alloc() : memref<f32>
+  %cst = arith.constant 0.0 : f32
+  affine.store %cst, %b[] : memref<f32>
+  // CHECK: affine.for
+  // CHECK-NOT: iter_args
+  affine.for %i = 0 to 10 {
+    %v = affine.load %x[%i] : memref<10xf32>
+    // First load/store pair to %b[].
+    // CHECK: affine.load
+    %acc1 = affine.load %b[] : memref<f32>
+    %sum1 = arith.addf %acc1, %v : f32
+    affine.store %sum1, %b[] : memref<f32>
+    // Second load/store pair to the same %b[] — duplicate MemRefAccess.
+    // Store-to-load forwarding would eliminate this load, but until it runs
+    // the routine must bail out rather than crash.
+    // CHECK: affine.load
+    %acc2 = affine.load %b[] : memref<f32>
+    %sum2 = arith.addf %acc2, %v : f32
+    affine.store %sum2, %b[] : memref<f32>
+  }
+  %res = affine.load %b[] : memref<f32>
+  return %res : f32
+}
