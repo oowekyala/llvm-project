@@ -134,7 +134,7 @@ def AffineForOp : Affine_Op<"for",
      ["getLoopInductionVars", "getLoopLowerBounds", "getLoopSteps",
       "getLoopUpperBounds", "getYieldedValuesMutable", "getLoopResults",
       "getInitsMutable", "getYieldedValuesMutable",
-      "replaceWithAdditionalYields"]>,
+      "replaceWithAdditionalYields", "getStaticTripCount"]>,
      DeclareOpInterfaceMethods<RegionBranchOpInterface,
      ["getEntrySuccessorOperands", "getSuccessorInputs"]>,
      DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>

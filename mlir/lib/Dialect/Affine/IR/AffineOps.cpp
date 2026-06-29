@@ -23,10 +23,12 @@
 #include "mlir/Interfaces/ShapedOpInterfaces.h"
 #include "mlir/Interfaces/ValueBoundsOpInterface.h"
 #include "mlir/Transforms/InliningUtils.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -2859,6 +2861,33 @@ std::optional<SmallVector<OpFoldResult>> AffineForOp::getLoopUpperBounds() {
   OpBuilder b(getContext());
   return SmallVector<OpFoldResult>{
       OpFoldResult(b.getI64IntegerAttr(getConstantUpperBound()))};
+}
+
+std::optional<APInt> AffineForOp::getStaticTripCount() {
+  if (hasConstantLowerBound() && hasConstantUpperBound()) {
+    OpBuilder b(getContext());
+    return mlir::constantTripCount(
+        b.getIndexAttr(getConstantLowerBound()),
+        b.getIndexAttr(getConstantUpperBound()),
+        b.getIndexAttr(getStep().getZExtValue()),
+        /*isSigned=*/false,
+        [](Value, Value, bool) -> std::optional<llvm::APSInt> {
+          return std::nullopt;
+        });
+  } else {
+
+    auto lb = getLowerBoundMap();
+    auto ub = getUpperBoundMap();
+    if (lb.getNumResults() != 1 || ub.getNumResults() != 1)
+      return std::nullopt;
+
+    ub = ub.shiftDims(lb.getNumDims()).shiftSymbols(lb.getNumSymbols());
+
+    auto diff = ub.getResult(0) - lb.getResult(0);
+    if (auto cst = llvm::dyn_cast_or_null<AffineConstantExpr>(diff))
+      return {APSInt::get(cst.getValue())};
+  }
+  return std::nullopt;
 }
 
 FailureOr<LoopLikeOpInterface> AffineForOp::replaceWithAdditionalYields(
