@@ -8,6 +8,7 @@
 //
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include <map>
 #include <utility>
 
@@ -142,6 +143,16 @@ computeTransposeBroadcast(AffineMap &map) {
   return {permutation, broadcast};
 }
 
+static RankedTensorType asTensorType(Type ty) {
+
+  if (auto rtty = dyn_cast_or_null<RankedTensorType>(ty))
+    return rtty;
+  if (TensorType::isValidElementType(ty))
+    // view scalar as rank zero tensor
+    return RankedTensorType::get({}, ty);
+  assert(false && "Incompatible type");
+}
+
 LogicalResult DecomposeProjectedPermutation::matchAndRewrite(
     GenericOp op, PatternRewriter &rewriter) const {
   if (!op.hasPureTensorSemantics() || op.isSingleInputOutput() ||
@@ -164,7 +175,7 @@ LogicalResult DecomposeProjectedPermutation::matchAndRewrite(
   // out which operand can supply that runtime-value (tensor.dim).
   // Leaving it as a future TODO.
   if (llvm::any_of(op->getOpOperands(), [](OpOperand &oper) {
-        auto opType = cast<RankedTensorType>(oper.get().getType());
+        auto opType = asTensorType(oper.get().getType());
         return ShapedType::isDynamicShape(opType.getShape());
       }))
     return failure();
@@ -180,7 +191,7 @@ LogicalResult DecomposeProjectedPermutation::matchAndRewrite(
   // or mix of two via operand's affine-map.
   for (int64_t i = 0; i < op.getNumDpsInputs(); ++i) {
     auto &map = newMap[i];
-    auto inputRTType = cast<RankedTensorType>(newInitValues[i].getType());
+    auto inputRTType = asTensorType(newInitValues[i].getType());
     auto elType = inputRTType.getElementType();
 
     /// Nothing to do if map is already an identity.
@@ -212,10 +223,21 @@ LogicalResult DecomposeProjectedPermutation::matchAndRewrite(
       Value emptyTensor = tensor::EmptyOp::create(rewriter, loc, outputShape,
                                                   inputRTType.getElementType());
 
-      auto broadcastOp = linalg::BroadcastOp::create(
-          rewriter, loc, newInitValues[i], emptyTensor, broadcastedDims);
+      Operation *res;
+      if (isa<RankedTensorType>(newInitValues[i].getType())) {
+        // Broadcast is only valid for a tensor input...
+        res = linalg::BroadcastOp::create(rewriter, loc, newInitValues[i],
+                                          emptyTensor, broadcastedDims);
+      } else {
+        // ...otherwise generate a FillOp.
+        // Since the input had rank 0, the broadcasted dims
+        // are necessarily all the dims of the init.
+        assert(broadcastedDims.size() == outputShape.size());
+        res = linalg::FillOp::create(rewriter, loc, newInitValues[i],
+                                     emptyTensor);
+      }
 
-      newInitValues[i] = broadcastOp->getResult(0);
+      newInitValues[i] = res->getResult(0);
       isChanged = true;
     }
     newMap[i] = rewriter.getMultiDimIdentityMap(map.getNumDims());
