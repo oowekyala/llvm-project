@@ -898,3 +898,39 @@ func.func @should_fuse_function_live_out_multi_store_producer(%live_in_out_m : m
 }
 
 // Add further tests in mlir/test/Transforms/loop-fusion-4.mlir
+
+// -----
+
+// A node's memref loads and stores hold every op with a memref read or write
+// effect, not only load and store ops. Asking such an op which single memref
+// it accesses used to be unreachable, so any of them inside a candidate loop
+// crashed the dependence check; memref.copy is the in-tree case.
+
+// CHECK-LABEL: func @fuse_across_memref_copy
+func.func @fuse_across_memref_copy(%src: memref<64x8xf32>) -> memref<64xf32> {
+  %cst = arith.constant 0.0 : f32
+  %out = memref.alloc() : memref<64xf32>
+  %staged = memref.alloc() : memref<8xf32>
+  affine.for %i = 0 to 64 {
+    %view = memref.subview %src[%i, 0] [1, 8] [1, 1]
+      : memref<64x8xf32> to memref<8xf32, strided<[1], offset: ?>>
+    memref.copy %view, %staged
+      : memref<8xf32, strided<[1], offset: ?>> to memref<8xf32>
+    %v = affine.load %staged[0] : memref<8xf32>
+    affine.store %v, %out[%i] : memref<64xf32>
+  }
+  affine.for %i = 0 to 64 {
+    %v = affine.load %out[%i] : memref<64xf32>
+    %w = arith.addf %v, %cst : f32
+    affine.store %w, %out[%i] : memref<64xf32>
+  }
+  // CHECK:      affine.for %{{.*}} = 0 to 64 {
+  // CHECK:        memref.copy
+  // CHECK:        affine.store
+  // CHECK-NEXT:   affine.load
+  // CHECK-NEXT:   arith.addf
+  // CHECK-NEXT:   affine.store
+  // CHECK-NEXT: }
+  // CHECK-NOT:  affine.for
+  return %out : memref<64xf32>
+}

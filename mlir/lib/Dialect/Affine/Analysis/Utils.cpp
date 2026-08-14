@@ -243,17 +243,29 @@ addNodeToMDG(Operation *nodeOp, MemRefDependenceGraph &mdg,
   return &node;
 }
 
-/// Returns the memref being read/written by a memref/affine load/store op.
-static Value getMemRef(Operation *memOp) {
-  if (auto memrefLoad = dyn_cast<memref::LoadOp>(memOp))
-    return memrefLoad.getMemRef();
+/// Returns true if `memOp` may read or write `memref`.
+///
+/// A node's `memrefLoads` and `memrefStores` hold every op with a memref read
+/// or write effect, not only load and store ops: `memref.copy`, call-like ops,
+/// and whatever effecting ops a downstream dialect defines all land there too
+/// (see `LoopNestStateCollector::collect`). Such an op may touch several
+/// memrefs at once, so this asks whether it touches a given one rather than
+/// returning the single one it accesses.
+static bool mayAccess(Operation *memOp, Value memref) {
   if (auto affineLoad = dyn_cast<AffineReadOpInterface>(memOp))
-    return affineLoad.getMemRef();
-  if (auto memrefStore = dyn_cast<memref::StoreOp>(memOp))
-    return memrefStore.getMemRef();
+    return affineLoad.getMemRef() == memref;
   if (auto affineStore = dyn_cast<AffineWriteOpInterface>(memOp))
-    return affineStore.getMemRef();
-  llvm_unreachable("unexpected op");
+    return affineStore.getMemRef() == memref;
+
+  // Collected from its memref operands because it states no effects at all, so
+  // there is nothing more precise to go on than that it was collected.
+  if (!isa<MemoryEffectOpInterface>(memOp))
+    return llvm::is_contained(memOp->getOperands(), memref);
+
+  SmallVector<Value> effected;
+  getEffectedValues<MemoryEffects::Read>(memOp, effected);
+  getEffectedValues<MemoryEffects::Write>(memOp, effected);
+  return llvm::is_contained(effected, memref);
 }
 
 /// Returns true if there may be a dependence on `memref` from srcNode's
@@ -272,17 +284,12 @@ static bool mayDependence(const Node &srcNode, const Node &dstNode,
   // true if there exists a conflicting read/write access involving such.
 
   // Check whether there is a dependence from a source read/write op to a
-  // destination read/write one; all expected to be memref/affine load/store.
+  // destination read/write one, i.e. whether both touch `memref` at all.
   auto hasNonAffineDep = [&](ArrayRef<Operation *> srcMemOps,
                              ArrayRef<Operation *> dstMemOps) {
-    return llvm::any_of(srcMemOps, [&](Operation *srcOp) {
-      Value srcMemref = getMemRef(srcOp);
-      if (srcMemref != memref)
-        return false;
-      return llvm::find_if(dstMemOps, [&](Operation *dstOp) {
-               return srcMemref == getMemRef(dstOp);
-             }) != dstMemOps.end();
-    });
+    auto touchesMemref = [&](Operation *op) { return mayAccess(op, memref); };
+    return llvm::any_of(srcMemOps, touchesMemref) &&
+           llvm::any_of(dstMemOps, touchesMemref);
   };
 
   SmallVector<Operation *> dstOps;
