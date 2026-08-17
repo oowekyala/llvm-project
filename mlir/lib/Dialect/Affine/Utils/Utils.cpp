@@ -848,12 +848,19 @@ static void forwardStoreToLoad(
   // to replace the load, if any.
   Operation *lastWriteStoreOp = nullptr;
 
+  MemRefAccess destAccess(loadOp);
   for (auto *user : loadOp.getMemRef().getUsers()) {
     auto storeOp = dyn_cast<AffineWriteOpInterface>(user);
     if (!storeOp)
       continue;
-    MemRefAccess srcAccess(storeOp);
-    MemRefAccess destAccess(loadOp);
+
+    // 2. The store has to dominate the load op to be candidate. Tested first
+    // because it is a lookup, where the access comparison below composes and
+    // simplifies both access maps; on a block holding hundreds of accesses to
+    // one memref that comparison is what this pass spends its time in, so it is
+    // worth reaching only for the pairs that survive everything cheaper.
+    if (!domInfo.dominates(storeOp, loadOp))
+      continue;
 
     // 1. Check if the store and the load have mathematically equivalent
     // affine access functions; this implies that they statically refer to the
@@ -863,11 +870,8 @@ static void forwardStoreToLoad(
     //     store %A[%M]
     //     load %A[%N]
     // Use the AffineValueMap difference based memref access equality checking.
+    MemRefAccess srcAccess(storeOp);
     if (srcAccess != destAccess)
-      continue;
-
-    // 2. The store has to dominate the load op to be candidate.
-    if (!domInfo.dominates(storeOp, loadOp))
       continue;
 
     // 3. The store must reach the load. Access function equivalence only
@@ -938,13 +942,6 @@ static void findUnusedStore(AffineWriteOpInterface writeA,
     if (writeB->getParentRegion() != writeA->getParentRegion())
       continue;
 
-    // Both operations must write to the same memory.
-    MemRefAccess srcAccess(writeB);
-    MemRefAccess destAccess(writeA);
-
-    if (srcAccess != destAccess)
-      continue;
-
     // Check that the store types match. If types differ, writeB may not cover
     // all bytes written by writeA (e.g. a narrower vector type), so
     // conservatively assume writeA is not dead.
@@ -957,6 +954,17 @@ static void findUnusedStore(AffineWriteOpInterface writeA,
 
     // writeB must postdominate writeA.
     if (!postDominanceInfo.postDominates(writeB, writeA))
+      continue;
+
+    // Both operations must write to the same memory. Tested after the cheap
+    // disqualifiers above, because comparing two accesses composes and
+    // simplifies both of their access maps -- orders of magnitude dearer than a
+    // type or postdominance check, and the cost that decides this pass on a
+    // block holding hundreds of accesses to one memref.
+    MemRefAccess srcAccess(writeB);
+    MemRefAccess destAccess(writeA);
+
+    if (srcAccess != destAccess)
       continue;
 
     // There cannot be an operation which reads from memory between
@@ -987,11 +995,42 @@ static void findUnusedStore(AffineWriteOpInterface writeA,
 /// - it exposes more opportunities for forwarding of load/store by
 /// moving the load/store out of the loop and into a scope.
 ///
-static bool findReductionVariablesAndRewrite(
+/// Returns the loop that replaces `loop`, or null when nothing was rewritten.
+/// The replacement is worth re-running this on: only pairs that are already
+/// down to a single load and store per location qualify, so forwarding the
+/// accesses of the pairs taken in one round can bring another round's into
+/// range.
+///
+/// `maxReductionVars` bounds how many reduction variables `loop` may carry in
+/// total, -1 meaning any number; what it already carries counts against that,
+/// so this takes at most the difference.
+///
+/// On success the accesses that ended up outside the loop are appended to
+/// `hoistedLoads` (placed before it) and `hoistedStores` (placed after it), so
+/// that the caller can forward exactly those away -- see
+/// forwardHoistedAccesses. Both are left untouched when this returns null.
+static LoopLikeOpInterface findReductionVariablesAndRewrite(
     LoopLikeOpInterface loop, PostDominanceInfo &postDominanceInfo,
-    llvm::function_ref<bool(Value, Value)> mayAlias) {
+    llvm::function_ref<bool(Value, Value)> mayAlias, int maxReductionVars,
+    SmallVectorImpl<Operation *> &hoistedLoads,
+    SmallVectorImpl<Operation *> &hoistedStores) {
+  if (maxReductionVars == 0)
+    return nullptr;
   if (!loop.getLoopResults())
-    return false;
+    return nullptr;
+
+  // The bound is on what the loop ends up carrying, so the iter_args it already
+  // has are spent budget. Reading them off the loop rather than tracking what
+  // this call adds is what makes the bound hold no matter how the pass is
+  // driven: a pipeline that runs it repeatedly over the same IR -- as one that
+  // interleaves it with canonicalization does -- must not be able to walk past
+  // the target's register budget a couple of accumulators per run.
+  int budget = maxReductionVars;
+  if (budget > 0) {
+    budget -= static_cast<int>(loop.getLoopResults()->size());
+    if (budget <= 0)
+      return nullptr;
+  }
 
   SmallVector<std::pair<AffineReadOpInterface, AffineWriteOpInterface>> result;
   auto *region = loop.getLoopRegions()[0];
@@ -1039,7 +1078,7 @@ static bool findReductionVariablesAndRewrite(
     }
   }
   if (result.empty())
-    return false;
+    return nullptr;
   // Reject if any two pairs share the same load MemRefAccess. This happens
   // when store-to-load forwarding hasn't run yet and the same accumulator
   // location is loaded/stored multiple times per iteration. The transformation
@@ -1047,15 +1086,27 @@ static bool findReductionVariablesAndRewrite(
   for (size_t i = 0; i < result.size(); ++i)
     for (size_t j = i + 1; j < result.size(); ++j)
       if (MemRefAccess(result[i].first) == MemRefAccess(result[j].first))
-        return false;
+        return nullptr;
+
+  // Keep only what the caller's budget allows. Dropping a pair is sound only
+  // because the check above has established that every pair is on a location of
+  // its own: a dropped pair keeps both of its accesses, so its location stays
+  // in memory and behaves exactly as it did, while a taken pair leaves the body
+  // altogether.
+  if (budget >= 0 && result.size() > static_cast<size_t>(budget))
+    result.truncate(budget);
 
   SmallVector<Value> newInitOperands;
   SmallVector<Value> newYieldOperands;
+  // Reported to the caller only once the rewrite has committed, so that the
+  // bail-out below leaves its vectors as it found them.
+  SmallVector<Operation *> clonedLoads;
   IRRewriter rewriter(loop->getContext());
   rewriter.startOpModification(loop->getParentOp());
   rewriter.setInsertionPoint(loop);
   for (auto [load, store] : result) {
     auto rewrittenLoad = cast<AffineReadOpInterface>(rewriter.clone(*load));
+    clonedLoads.push_back(rewrittenLoad);
     newInitOperands.push_back(rewrittenLoad.getValue());
     newYieldOperands.push_back(store.getValueToStore());
   }
@@ -1068,9 +1119,10 @@ static bool findReductionVariablesAndRewrite(
       });
   if (failed(rewritten)) {
     rewriter.cancelOpModification(loop->getParentOp());
-    return false;
+    return nullptr;
   }
   auto newLoop = *rewritten;
+  llvm::append_range(hoistedLoads, clonedLoads);
 
   rewriter.setInsertionPointAfter(newLoop);
   Operation *next = newLoop;
@@ -1078,10 +1130,11 @@ static bool findReductionVariablesAndRewrite(
        llvm::zip(result, rewritten->getRegionIterArgs().drop_front(numResults),
                  rewritten->getLoopResults()->drop_front(numResults))) {
     auto load = loadStore.first;
-    // Avoid iterating load->result's use-list directly: replaceWithAdditionalYields
-    // may have grown the yield's OperandStorage (realloc + move), which rebuilds
-    // the use-chain and can leave stale back-pointers that crash removeFromCurrent.
-    // Instead, walk the loop body ops and patch operands in place.
+    // Avoid iterating load->result's use-list directly:
+    // replaceWithAdditionalYields may have grown the yield's OperandStorage
+    // (realloc + move), which rebuilds the use-chain and can leave stale
+    // back-pointers that crash removeFromCurrent. Instead, walk the loop body
+    // ops and patch operands in place.
     Value loadResult = load->getResult(0);
     for (Operation &bodyOp : newLoop.getLoopRegions()[0]->front()) {
       for (OpOperand &operand : bodyOp.getOpOperands()) {
@@ -1095,12 +1148,13 @@ static bool findReductionVariablesAndRewrite(
     rewriter.moveOpAfter(store, next);
     store.getValueToStoreMutable().set(loopRes);
     next = store;
+    hoistedStores.push_back(store);
   }
 
   rewriter.finalizeOpModification(newLoop->getParentOp());
   LLVM_DEBUG(llvm::dbgs() << "Replaced loop reduction variable: \n"
                           << newLoop << "\n");
-  return true;
+  return newLoop;
 }
 
 // The load to load forwarding / redundant load elimination is similar to the
@@ -1114,31 +1168,37 @@ static void loadCSE(AffineReadOpInterface loadA,
                     DominanceInfo &domInfo,
                     llvm::function_ref<bool(Value, Value)> mayAlias) {
   SmallVector<AffineReadOpInterface, 4> loadCandidates;
+  MemRefAccess destAccess(loadA);
   for (auto *user : loadA.getMemRef().getUsers()) {
     auto loadB = dyn_cast<AffineReadOpInterface>(user);
     if (!loadB || loadB == loadA)
       continue;
 
-    MemRefAccess srcAccess(loadB);
-    MemRefAccess destAccess(loadA);
+    // The cheap disqualifiers go first. Comparing two accesses composes and
+    // simplifies both of their access maps, and testing for an intervening
+    // write runs a presburger dependence check per memory op in between; both
+    // are orders of magnitude dearer than a type or dominance check, and on a
+    // block holding hundreds of accesses to one memref they are what decides
+    // how long this pass takes.
 
-    // 1. The accesses should be to be to the same location.
-    if (srcAccess != destAccess) {
+    // Check if two values have the same shape. This is needed for affine vector
+    // loads.
+    if (loadB.getValue().getType() != loadA.getValue().getType())
       continue;
-    }
 
     // 2. loadB should dominate loadA.
     if (!domInfo.dominates(loadB, loadA))
       continue;
 
+    // 1. The accesses should be to be to the same location.
+    MemRefAccess srcAccess(loadB);
+    if (srcAccess != destAccess) {
+      continue;
+    }
+
     // 3. There should not be a write between loadA and loadB.
     if (!affine::hasNoInterveningEffect<MemoryEffects::Write>(
             loadB.getOperation(), loadA, mayAlias))
-      continue;
-
-    // Check if two values have the same shape. This is needed for affine vector
-    // loads.
-    if (loadB.getValue().getType() != loadA.getValue().getType())
       continue;
 
     loadCandidates.push_back(loadB);
@@ -1194,35 +1254,104 @@ void doForwarding(Operation *parentOp, DominanceInfo &domInfo,
                   PostDominanceInfo &postDomInfo,
                   llvm::function_ref<bool(Value, Value)> mayAlias);
 
+/// Forward away the accumulator accesses that a reduction-variable rewrite has
+/// just moved out of a loop and into the enclosing block: `hoistedLoads` sit
+/// before the rewritten loop, `hoistedStores` after it.
+///
+/// This has to run between two rewrites of the same nest, because a location is
+/// only taken as a reduction variable while it is down to a single load and a
+/// single store -- findReductionVariablesAndRewrite rejects duplicates outright
+/// -- and a rewrite is what leaves the previous round's accesses behind as
+/// those duplicates. Only the ops it moved can be the duplicate, which is why
+/// this takes them by name rather than re-running doForwarding over the
+/// enclosing op: what that op holds is unbounded (an unrolled kernel body
+/// reaches hundreds of accesses) and every candidate pair doForwarding
+/// considers costs a presburger dependence check.
+static void
+forwardHoistedAccesses(ArrayRef<Operation *> hoistedLoads,
+                       ArrayRef<Operation *> hoistedStores,
+                       DominanceInfo &domInfo, PostDominanceInfo &postDomInfo,
+                       llvm::function_ref<bool(Value, Value)> mayAlias) {
+  SmallVector<Operation *, 4> opsToErase;
+  // Collected but not acted on: eliminating a dead accumulator allocation
+  // enables no further rewrite, so it is left to the caller's final sweep.
+  SmallPtrSet<Value, 4> memrefsToErase;
+
+  for (Operation *op : hoistedLoads)
+    forwardStoreToLoad(cast<AffineReadOpInterface>(op), opsToErase,
+                       memrefsToErase, domInfo, mayAlias);
+  SmallPtrSet<Operation *, 4> erasedLoads(opsToErase.begin(), opsToErase.end());
+  for (Operation *op : opsToErase)
+    op->erase();
+  opsToErase.clear();
+
+  for (Operation *op : hoistedStores)
+    findUnusedStore(cast<AffineWriteOpInterface>(op), opsToErase, postDomInfo,
+                    mayAlias);
+  for (Operation *op : opsToErase)
+    op->erase();
+  opsToErase.clear();
+
+  // Load CSE runs after store elimination for the same reason it does in
+  // doForwarding: a store that is about to disappear would otherwise be read as
+  // an intervening effect.
+  for (Operation *op : hoistedLoads)
+    if (!erasedLoads.contains(op))
+      loadCSE(cast<AffineReadOpInterface>(op), opsToErase, domInfo, mayAlias);
+  for (Operation *op : opsToErase)
+    op->erase();
+}
+
 void mlir::affine::affineScalarReplace(Operation *parentOp,
                                        DominanceInfo &domInfo,
                                        PostDominanceInfo &postDomInfo,
-                                       AliasAnalysis &aliasAnalysis) {
+                                       AliasAnalysis &aliasAnalysis,
+                                       int maxReductionVars) {
 
   auto mayAlias = [&](Value val1, Value val2) -> bool {
     return !aliasAnalysis.alias(val1, val2).isNo();
   };
 
-  bool continueWalk;
-  do {
-    continueWalk = false;
+  // Rewrite reduction variables loop by loop, innermost first, forwarding the
+  // accesses each rewrite hoists before moving on to the enclosing loop -- see
+  // forwardHoistedAccesses for why that order is what makes a nest of reduction
+  // loops rewritable all the way out.
+  //
+  // `walk` is post-order, so collecting the loops up front yields exactly that
+  // innermost-first order. Collecting is also what lets the traversal continue
+  // across a rewrite: replaceWithAdditionalYields erases the loop it rewrites
+  // and only that one, and every entry still to be visited is either an
+  // ancestor of it or in a disjoint subtree, so none of them can go stale.
+  SmallVector<AffineForOp> loops;
+  parentOp->walk([&](AffineForOp loop) { loops.push_back(loop); });
 
-    // Walk loops and rewrite reduction variables. Once a loop has been
-    // rewritten, we need to perform forwarding to eliminate the new store and
-    // loads introduced before and after the new loop. Then we need to continue
-    // doing that loop by loop.
-    parentOp->walk([&](AffineForOp loop) {
-      Operation *loopParent = loop->getParentOp();
-      bool rewritten =
-          findReductionVariablesAndRewrite(loop, postDomInfo, mayAlias);
-      if (rewritten && loopParent != parentOp) {
-        doForwarding(loopParent, domInfo, postDomInfo, mayAlias);
-        continueWalk = true;
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
-  } while (continueWalk);
+  SmallVector<Operation *> hoistedLoads, hoistedStores;
+  for (AffineForOp forOp : loops) {
+    // A loop takes as many rounds as it has accumulators: each round only sees
+    // the locations that are already down to one load and one store, and is
+    // what forwards the rest closer to that shape. The parent op survives its
+    // child being replaced, so it stays the forwarding scope throughout.
+    Operation *loopParent = forOp->getParentOp();
+    LoopLikeOpInterface loop = forOp;
+    while (true) {
+      hoistedLoads.clear();
+      hoistedStores.clear();
+      // maxReductionVars bounds the loop's iter_args, and each round adds to
+      // them, so the round that reaches the bound reports nothing rewritten and
+      // ends the sequence -- no separate tally needed here.
+      LoopLikeOpInterface rewritten = findReductionVariablesAndRewrite(
+          loop, postDomInfo, mayAlias, maxReductionVars, hoistedLoads,
+          hoistedStores);
+      if (!rewritten)
+        break;
+      // A loop sitting directly in `parentOp` hoists into `parentOp`'s own
+      // block, which the sweep below covers anyway.
+      if (loopParent != parentOp)
+        forwardHoistedAccesses(hoistedLoads, hoistedStores, domInfo,
+                               postDomInfo, mayAlias);
+      loop = rewritten;
+    }
+  }
 
   // cleanup the parent
   doForwarding(parentOp, domInfo, postDomInfo, mayAlias);

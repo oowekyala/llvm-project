@@ -1099,3 +1099,50 @@ func.func @reduction_duplicate_access_no_iter_arg(%x : memref<10xf32>) -> f32 {
   %res = affine.load %b[] : memref<f32>
   return %res : f32
 }
+
+// Four locations qualify as reduction variables, but each one extracted is a
+// value live across the whole body, so max-reduction-vars (2 by default) caps
+// how many a loop ends up carrying. The two that are left keep both of their
+// accesses and stay in memory.
+// CHECK-LABEL: func @reduction_extraction_bounded
+func.func @reduction_extraction_bounded(%x : memref<4x8xf32>) -> memref<4xf32> {
+  %b = memref.alloc() : memref<4xf32>
+  %cst = arith.constant 0.0 : f32
+  affine.for %r = 0 to 4 {
+    affine.store %cst, %b[%r] : memref<4xf32>
+  }
+  // Exactly two iter_args, so exactly one comma inside the parentheses.
+  // CHECK: affine.for %{{.*}} = 0 to 8 iter_args(%{{[^)]*}}, %{{[^,)]*}}) -> (f32, f32) {
+  affine.for %i = 0 to 8 {
+    %v0 = affine.load %x[0, %i] : memref<4x8xf32>
+    %a0 = affine.load %b[0] : memref<4xf32>
+    %s0 = arith.addf %a0, %v0 : f32
+    affine.store %s0, %b[0] : memref<4xf32>
+    %v1 = affine.load %x[1, %i] : memref<4x8xf32>
+    %a1 = affine.load %b[1] : memref<4xf32>
+    %s1 = arith.addf %a1, %v1 : f32
+    affine.store %s1, %b[1] : memref<4xf32>
+    %v2 = affine.load %x[2, %i] : memref<4x8xf32>
+    %a2 = affine.load %b[2] : memref<4xf32>
+    %s2 = arith.addf %a2, %v2 : f32
+    affine.store %s2, %b[2] : memref<4xf32>
+    %v3 = affine.load %x[3, %i] : memref<4x8xf32>
+    %a3 = affine.load %b[3] : memref<4xf32>
+    %s3 = arith.addf %a3, %v3 : f32
+    affine.store %s3, %b[3] : memref<4xf32>
+  }
+  return %b : memref<4xf32>
+}
+
+// RUN: mlir-opt -allow-unregistered-dialect %s -affine-scalrep=max-reduction-vars=-1 \
+// RUN:   | FileCheck %s --check-prefix=UNBOUNDED
+// With the bound lifted, the same loop takes all four.
+// UNBOUNDED-LABEL: func @reduction_extraction_bounded
+// UNBOUNDED: iter_args({{.*}}) -> (f32, f32, f32, f32) {
+
+// Running the pass again must not push a loop past the bound: what the loop
+// already carries counts against it, so a second run adds nothing.
+// RUN: mlir-opt -allow-unregistered-dialect %s -affine-scalrep -affine-scalrep \
+// RUN:   | FileCheck %s --check-prefix=TWICE
+// TWICE-LABEL: func @reduction_extraction_bounded
+// TWICE: iter_args({{.*}}) -> (f32, f32) {

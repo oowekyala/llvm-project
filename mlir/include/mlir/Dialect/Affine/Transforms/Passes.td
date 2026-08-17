@@ -344,6 +344,17 @@ def AffineScalarReplacement : AffineScopePass<"affine-scalrep"> {
     ```
   }];
   let constructor = "mlir::affine::createAffineScalarReplacementPass()";
+  let options = [
+    Option<"maxReductionVars", "max-reduction-vars", "int", /*default=*/"2",
+           "Bound on how many reduction variables are extracted into one "
+           "loop's iter_args. Each one is live across the whole loop body, so "
+           "they compete for registers: past what the target has, extracting "
+           "more spills them to the stack instead of leaving them in the "
+           "memory locations they already occupy, which is what an unrolled "
+           "body -- holding one accumulator per unrolled copy -- invites. "
+           "-1 lifts the bound; 0 leaves reduction variables alone and runs "
+           "the rest of the pass.">
+  ];
 }
 
 def AffineVectorize : AffineScopePass<"affine-super-vectorize"> {

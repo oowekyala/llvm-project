@@ -113,9 +113,14 @@ void vectorizeChildAffineLoops(Operation *parentOp, bool vectorizeReductions,
 /// Replace affine store and load accesses by scalars by forwarding stores to
 /// loads and eliminate invariant affine loads; consequently, eliminate dead
 /// allocs.
+///
+/// `maxReductionVars` bounds how many reduction variables are extracted into
+/// any one loop's iter_args, which is what keeps the extraction inside the
+/// target's register budget; -1 lifts the bound and 0 extracts none. See the
+/// affine-scalrep pass option of the same name for the reasoning.
 void affineScalarReplace(Operation *parentOp, DominanceInfo &domInfo,
                          PostDominanceInfo &postDomInfo,
-                         AliasAnalysis &analysis);
+                         AliasAnalysis &analysis, int maxReductionVars);
 
 /// Vectorizes affine loops in 'loops' using the n-D vectorization factors in
 /// 'vectorSizes'. By default, each vectorization factor is applied

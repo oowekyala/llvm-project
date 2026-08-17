@@ -46,7 +46,7 @@ mlir::affine::createAffineScalarReplacementPass() {
 }
 
 void AffineScalarReplacement::runOnOperation() {
-  affineScalarReplace(
-      getOperation(), getAnalysis<DominanceInfo>(),
-      getAnalysis<PostDominanceInfo>(), getAnalysis<AliasAnalysis>());
+  affineScalarReplace(getOperation(), getAnalysis<DominanceInfo>(),
+                      getAnalysis<PostDominanceInfo>(),
+                      getAnalysis<AliasAnalysis>(), maxReductionVars);
 }
