@@ -19,6 +19,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 namespace mlir {
 class Operation;
@@ -106,10 +107,18 @@ private:
 /// returns a FusionResult explaining why fusion is not feasible.
 /// NOTE: This function is not feature complete and should only be used in
 /// testing.
+///
+/// `maxLoopDepthCache`, if given, is a caller-owned cache of the deepest
+/// dependence-preserving fusion depth for this pair of nests. That depth does
+/// not depend on `dstLoopDepth` but establishing it costs a dependence check per
+/// ordered pair of accesses, so a caller sweeping the depth range should pass
+/// the same cache to every call rather than pay for it once per depth. Valid
+/// only for as long as neither nest is modified.
 FusionResult
 canFuseLoops(AffineForOp srcForOp, AffineForOp dstForOp, unsigned dstLoopDepth,
              ComputationSliceState *srcSlice,
-             FusionStrategy fusionStrategy = FusionStrategy::Generic);
+             FusionStrategy fusionStrategy = FusionStrategy::Generic,
+             std::optional<unsigned> *maxLoopDepthCache = nullptr);
 
 /// Fuses 'srcForOp' into 'dstForOp' with destination loop block insertion
 /// point and source slice loop bounds specified in 'srcSlice'.

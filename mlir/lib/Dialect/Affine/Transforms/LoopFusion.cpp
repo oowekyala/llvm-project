@@ -990,11 +990,15 @@ public:
         SmallVector<ComputationSliceState, 8> depthSliceUnions;
         depthSliceUnions.resize(dstLoopDepthTest);
         FusionStrategy strategy(FusionStrategy::ProducerConsumer);
+        // The same for every depth tested here, and the dearest part of the
+        // feasibility check; nothing in this loop modifies either nest, so one
+        // cache serves the whole sweep. See canFuseLoops.
+        std::optional<unsigned> maxLoopDepthCache;
         for (unsigned i = 1; i <= dstLoopDepthTest; ++i) {
-          FusionResult result =
-              affine::canFuseLoops(srcAffineForOp, dstAffineForOp,
-                                   /*dstLoopDepth=*/i + numSurroundingLoops,
-                                   &depthSliceUnions[i - 1], strategy);
+          FusionResult result = affine::canFuseLoops(
+              srcAffineForOp, dstAffineForOp,
+              /*dstLoopDepth=*/i + numSurroundingLoops,
+              &depthSliceUnions[i - 1], strategy, &maxLoopDepthCache);
           if (result.value == FusionResult::Success) {
             maxLegalFusionDepth = i;
             LDBG() << "Found valid slice for depth: " << i;

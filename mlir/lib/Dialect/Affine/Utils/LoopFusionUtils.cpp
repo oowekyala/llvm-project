@@ -216,16 +216,26 @@ static unsigned getMaxLoopDepth(ArrayRef<Operation *> srcOps,
 
   // Check dependences on all pairs of ops in 'targetDstOps' and store the
   // minimum loop depth at which a dependence is satisfied.
-  for (unsigned i = 0, e = targetDstOps.size(); i < e; ++i) {
+  //
+  // The result being a minimum is what bounds the search: only a dependence
+  // shallower than the minimum reached so far can lower it, and 0 is the floor.
+  // So the depth range worth testing narrows as the sweep proceeds, and once the
+  // minimum reaches 0 every pair left over is dead work. Worth cutting off,
+  // because there is a pair per ordered pair of accesses and each one pays a
+  // presburger dependence check per depth -- on a body holding hundreds of
+  // accesses to one memref, as an unrolled loop nest does, running that to
+  // completion costs far more than the fusion it is deciding.
+  for (unsigned i = 0, e = targetDstOps.size(); i < e && loopDepth > 0; ++i) {
     Operation *srcOpInst = targetDstOps[i];
     MemRefAccess srcAccess(srcOpInst);
-    for (unsigned j = 0; j < e; ++j) {
+    for (unsigned j = 0; j < e && loopDepth > 0; ++j) {
       auto *dstOpInst = targetDstOps[j];
       MemRefAccess dstAccess(dstOpInst);
 
       unsigned numCommonLoops =
           getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
-      for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
+      unsigned maxUsefulDepth = std::min(numCommonLoops + 1, loopDepth);
+      for (unsigned d = 1; d <= maxUsefulDepth; ++d) {
         // TODO: Cache dependence analysis results, check cache here.
         DependenceResult result =
             checkMemrefAccessDependence(srcAccess, dstAccess, d);
@@ -242,14 +252,14 @@ static unsigned getMaxLoopDepth(ArrayRef<Operation *> srcOps,
   return loopDepth;
 }
 
-// TODO: This pass performs some computation that is the same for all the depths
-// (e.g., getMaxLoopDepth). Implement a version of this utility that processes
-// all the depths at once or only the legal maximal depth for maximal fusion.
-FusionResult mlir::affine::canFuseLoops(AffineForOp srcForOp,
-                                        AffineForOp dstForOp,
-                                        unsigned dstLoopDepth,
-                                        ComputationSliceState *srcSlice,
-                                        FusionStrategy fusionStrategy) {
+// TODO: This pass performs some computation that is the same for all the depths.
+// Implement a version of this utility that processes all the depths at once or
+// only the legal maximal depth for maximal fusion. getMaxLoopDepth, the dearest
+// of those, is already reusable across depths via `maxLoopDepthCache`.
+FusionResult mlir::affine::canFuseLoops(
+    AffineForOp srcForOp, AffineForOp dstForOp, unsigned dstLoopDepth,
+    ComputationSliceState *srcSlice, FusionStrategy fusionStrategy,
+    std::optional<unsigned> *maxLoopDepthCache) {
   // Return 'failure' if 'dstLoopDepth == 0'.
   if (dstLoopDepth == 0) {
     LDBG() << "Cannot fuse loop nests at depth 0";
@@ -296,7 +306,15 @@ FusionResult mlir::affine::canFuseLoops(AffineForOp srcForOp,
   if (fusionStrategy.getStrategy() == FusionStrategy::ProducerConsumer) {
     // TODO: 'getMaxLoopDepth' does not support forward slice fusion.
     assert(isSrcForOpBeforeDstForOp && "Unexpected forward slice fusion");
-    if (getMaxLoopDepth(opsA, opsB) < dstLoopDepth) {
+    unsigned maxLoopDepth;
+    if (maxLoopDepthCache && maxLoopDepthCache->has_value()) {
+      maxLoopDepth = **maxLoopDepthCache;
+    } else {
+      maxLoopDepth = getMaxLoopDepth(opsA, opsB);
+      if (maxLoopDepthCache)
+        *maxLoopDepthCache = maxLoopDepth;
+    }
+    if (maxLoopDepth < dstLoopDepth) {
       LDBG() << "Fusion would violate loop dependences";
       return FusionResult::FailFusionDependence;
     }
