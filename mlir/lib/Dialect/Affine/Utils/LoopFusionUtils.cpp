@@ -225,6 +225,9 @@ static unsigned getMaxLoopDepth(ArrayRef<Operation *> srcOps,
   // presburger dependence check per depth -- on a body holding hundreds of
   // accesses to one memref, as an unrolled loop nest does, running that to
   // completion costs far more than the fusion it is deciding.
+  // Every op here appears in a pair with every other, at each depth, so this
+  // builds each one's access relation once instead of once per pair per depth.
+  AccessRelationCache relationCache;
   for (unsigned i = 0, e = targetDstOps.size(); i < e && loopDepth > 0; ++i) {
     Operation *srcOpInst = targetDstOps[i];
     MemRefAccess srcAccess(srcOpInst);
@@ -236,9 +239,10 @@ static unsigned getMaxLoopDepth(ArrayRef<Operation *> srcOps,
           getNumCommonSurroundingLoops(*srcOpInst, *dstOpInst);
       unsigned maxUsefulDepth = std::min(numCommonLoops + 1, loopDepth);
       for (unsigned d = 1; d <= maxUsefulDepth; ++d) {
-        // TODO: Cache dependence analysis results, check cache here.
-        DependenceResult result =
-            checkMemrefAccessDependence(srcAccess, dstAccess, d);
+        DependenceResult result = checkMemrefAccessDependence(
+            srcAccess, dstAccess, d, /*dependenceConstraints=*/nullptr,
+            /*dependenceComponents=*/nullptr, /*allowRAR=*/false,
+            &relationCache);
         if (hasDependence(result)) {
           // Store minimum loop depth and break because we want the min 'd' at
           // which there is a dependence.

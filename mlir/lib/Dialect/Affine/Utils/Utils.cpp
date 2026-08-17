@@ -659,7 +659,8 @@ static bool mustReachAtInnermost(const MemRefAccess &srcAccess,
 /// scope of the outermost `minSurroundingLoops` loops that surround them.
 /// `srcMemOp` and `destMemOp` are expected to be affine read/write ops.
 static bool mayHaveEffect(Operation *srcMemOp, Operation *destMemOp,
-                          unsigned minSurroundingLoops) {
+                          unsigned minSurroundingLoops,
+                          AccessRelationCache &relationCache) {
   MemRefAccess srcAccess(srcMemOp);
   MemRefAccess destAccess(destMemOp);
 
@@ -676,7 +677,7 @@ static bool mayHaveEffect(Operation *srcMemOp, Operation *destMemOp,
     for (unsigned d = nsLoops + 1; d > minSurroundingLoops; d--) {
       DependenceResult result = checkMemrefAccessDependence(
           srcAccess, destAccess, d, &dependenceConstraints,
-          /*dependenceComponents=*/nullptr);
+          /*dependenceComponents=*/nullptr, /*allowRAR=*/false, &relationCache);
       // A dependence failure or the presence of a dependence implies a
       // side effect.
       if (!noDependence(result))
@@ -692,11 +693,18 @@ static bool mayHaveEffect(Operation *srcMemOp, Operation *destMemOp,
 
 template <typename EffectType, typename T>
 bool mlir::affine::hasNoInterveningEffect(
-    Operation *start, T memOp,
-    llvm::function_ref<bool(Value, Value)> mayAlias) {
+    Operation *start, T memOp, llvm::function_ref<bool(Value, Value)> mayAlias,
+    AccessRelationCache *relationCache) {
   // A boolean representing whether an intervening operation could have impacted
   // memOp.
   bool hasSideEffect = false;
+
+  // Stands in when the caller keeps no cache of its own. Local to the call, so
+  // it only saves rebuilding `memOp`'s relation per (intervening op, depth)
+  // pair; the reuse across calls needs the caller's.
+  AccessRelationCache localRelationCache;
+  AccessRelationCache &relations =
+      relationCache ? *relationCache : localRelationCache;
 
   // Check whether the effect on memOp can be caused by a given operation op.
   Value memref = memOp.getMemRef();
@@ -736,7 +744,7 @@ bool mlir::affine::hasNoInterveningEffect(
         // smaller number of surrounding loops before.
         unsigned minSurroundingLoops =
             getNumCommonSurroundingLoops(*start, *memOp);
-        if (mayHaveEffect(op, memOp, minSurroundingLoops))
+        if (mayHaveEffect(op, memOp, minSurroundingLoops, relations))
           hasSideEffect = true;
         return;
       }
@@ -842,7 +850,8 @@ bool mlir::affine::hasNoInterveningEffect(
 static void forwardStoreToLoad(
     AffineReadOpInterface loadOp, SmallVectorImpl<Operation *> &loadOpsToErase,
     SmallPtrSetImpl<Value> &memrefsToErase, DominanceInfo &domInfo,
-    llvm::function_ref<bool(Value, Value)> mayAlias) {
+    llvm::function_ref<bool(Value, Value)> mayAlias,
+    AccessRelationCache &relationCache) {
 
   // The store op candidate for forwarding that satisfies all conditions
   // to replace the load, if any.
@@ -882,8 +891,8 @@ static void forwardStoreToLoad(
 
     // 4. Ensure there is no intermediate operation which could replace the
     // value in memory.
-    if (!affine::hasNoInterveningEffect<MemoryEffects::Write>(storeOp, loadOp,
-                                                              mayAlias))
+    if (!affine::hasNoInterveningEffect<MemoryEffects::Write>(
+            storeOp, loadOp, mayAlias, &relationCache))
       continue;
 
     // We now have a candidate for forwarding.
@@ -915,7 +924,7 @@ template bool
 mlir::affine::hasNoInterveningEffect<mlir::MemoryEffects::Read,
                                      affine::AffineReadOpInterface>(
     mlir::Operation *, affine::AffineReadOpInterface,
-    llvm::function_ref<bool(Value, Value)>);
+    llvm::function_ref<bool(Value, Value)>, AccessRelationCache *);
 
 // This attempts to find stores which have no impact on the final result.
 // A writing op writeA will be eliminated if there exists an op writeB if
@@ -926,7 +935,8 @@ mlir::affine::hasNoInterveningEffect<mlir::MemoryEffects::Read,
 static void findUnusedStore(AffineWriteOpInterface writeA,
                             SmallVectorImpl<Operation *> &opsToErase,
                             PostDominanceInfo &postDominanceInfo,
-                            llvm::function_ref<bool(Value, Value)> mayAlias) {
+                            llvm::function_ref<bool(Value, Value)> mayAlias,
+                            AccessRelationCache &relationCache) {
 
   for (Operation *user : writeA.getMemRef().getUsers()) {
     // Only consider writing operations.
@@ -969,8 +979,8 @@ static void findUnusedStore(AffineWriteOpInterface writeA,
 
     // There cannot be an operation which reads from memory between
     // the two writes.
-    if (!affine::hasNoInterveningEffect<MemoryEffects::Read>(writeA, writeB,
-                                                             mayAlias))
+    if (!affine::hasNoInterveningEffect<MemoryEffects::Read>(
+            writeA, writeB, mayAlias, &relationCache))
       continue;
 
     LLVM_DEBUG(llvm::dbgs() << "Erased store (unused): " << writeA << "\n");
@@ -1166,7 +1176,8 @@ static LoopLikeOpInterface findReductionVariablesAndRewrite(
 static void loadCSE(AffineReadOpInterface loadA,
                     SmallVectorImpl<Operation *> &loadOpsToErase,
                     DominanceInfo &domInfo,
-                    llvm::function_ref<bool(Value, Value)> mayAlias) {
+                    llvm::function_ref<bool(Value, Value)> mayAlias,
+                    AccessRelationCache &relationCache) {
   SmallVector<AffineReadOpInterface, 4> loadCandidates;
   MemRefAccess destAccess(loadA);
   for (auto *user : loadA.getMemRef().getUsers()) {
@@ -1198,7 +1209,7 @@ static void loadCSE(AffineReadOpInterface loadA,
 
     // 3. There should not be a write between loadA and loadB.
     if (!affine::hasNoInterveningEffect<MemoryEffects::Write>(
-            loadB.getOperation(), loadA, mayAlias))
+            loadB.getOperation(), loadA, mayAlias, &relationCache))
       continue;
 
     loadCandidates.push_back(loadB);
@@ -1276,28 +1287,34 @@ forwardHoistedAccesses(ArrayRef<Operation *> hoistedLoads,
   // Collected but not acted on: eliminating a dead accumulator allocation
   // enables no further rewrite, so it is left to the caller's final sweep.
   SmallPtrSet<Value, 4> memrefsToErase;
+  // Shared by the ops of one phase, and cleared at each erase below: its keys
+  // are operations, and an erased one's address can come back as another op.
+  AccessRelationCache relationCache;
 
   for (Operation *op : hoistedLoads)
     forwardStoreToLoad(cast<AffineReadOpInterface>(op), opsToErase,
-                       memrefsToErase, domInfo, mayAlias);
+                       memrefsToErase, domInfo, mayAlias, relationCache);
   SmallPtrSet<Operation *, 4> erasedLoads(opsToErase.begin(), opsToErase.end());
   for (Operation *op : opsToErase)
     op->erase();
   opsToErase.clear();
+  relationCache.clear();
 
   for (Operation *op : hoistedStores)
     findUnusedStore(cast<AffineWriteOpInterface>(op), opsToErase, postDomInfo,
-                    mayAlias);
+                    mayAlias, relationCache);
   for (Operation *op : opsToErase)
     op->erase();
   opsToErase.clear();
+  relationCache.clear();
 
   // Load CSE runs after store elimination for the same reason it does in
   // doForwarding: a store that is about to disappear would otherwise be read as
   // an intervening effect.
   for (Operation *op : hoistedLoads)
     if (!erasedLoads.contains(op))
-      loadCSE(cast<AffineReadOpInterface>(op), opsToErase, domInfo, mayAlias);
+      loadCSE(cast<AffineReadOpInterface>(op), opsToErase, domInfo, mayAlias,
+              relationCache);
   for (Operation *op : opsToErase)
     op->erase();
 }
@@ -1366,17 +1383,25 @@ void doForwarding(Operation *parentOp, DominanceInfo &domInfo,
   // A list of memref's that are potentially dead / could be eliminated.
   SmallPtrSet<Value, 4> memrefsToErase;
 
+  // Shared by every op a phase visits, which is where nearly all of the reuse
+  // is: each of them is tested against the same accesses in between. Cleared at
+  // each erase below, since its keys are operations and an erased one's address
+  // can come back as another op.
+  AccessRelationCache relationCache;
+
   // Walk all load's and perform store to load forwarding.
   parentOp->walk([&](AffineReadOpInterface loadOp) {
-    forwardStoreToLoad(loadOp, opsToErase, memrefsToErase, domInfo, mayAlias);
+    forwardStoreToLoad(loadOp, opsToErase, memrefsToErase, domInfo, mayAlias,
+                       relationCache);
   });
   for (auto *op : opsToErase)
     op->erase();
   opsToErase.clear();
+  relationCache.clear();
 
   // Walk all store's and perform unused store elimination
   parentOp->walk([&](AffineWriteOpInterface storeOp) {
-    findUnusedStore(storeOp, opsToErase, postDomInfo, mayAlias);
+    findUnusedStore(storeOp, opsToErase, postDomInfo, mayAlias, relationCache);
   });
   for (auto *op : opsToErase)
     op->erase();
@@ -1405,11 +1430,14 @@ void doForwarding(Operation *parentOp, DominanceInfo &domInfo,
     defOp->erase();
   }
 
+  // Placed after the dead-memref sweep above, which erases too.
+  relationCache.clear();
+
   // To eliminate as many loads as possible, run load CSE after eliminating
   // stores. Otherwise, some stores are wrongly seen as having an intervening
   // effect.
   parentOp->walk([&](AffineReadOpInterface loadOp) {
-    loadCSE(loadOp, opsToErase, domInfo, mayAlias);
+    loadCSE(loadOp, opsToErase, domInfo, mayAlias, relationCache);
   });
   for (auto *op : opsToErase)
     op->erase();

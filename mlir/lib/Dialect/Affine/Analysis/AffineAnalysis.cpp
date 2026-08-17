@@ -528,6 +528,29 @@ void MemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
   accessMap->reset(map, operands);
 }
 
+LogicalResult mlir::affine::AccessRelationCache::get(const MemRefAccess &access,
+                                                     IntegerRelation &rel) {
+  auto [it, inserted] = relations.try_emplace(access.opInst);
+  if (inserted) {
+    IntegerRelation built(PresburgerSpace::getRelationSpace());
+    if (succeeded(access.getAccessRelation(built)))
+      it->second = std::move(built);
+  }
+  if (!it->second)
+    return failure();
+  rel = *it->second;
+  return success();
+}
+
+/// Builds `access`'s relation into `rel`, through `cache` when there is one.
+static LogicalResult getAccessRelation(const MemRefAccess &access,
+                                       IntegerRelation &rel,
+                                       AccessRelationCache *cache) {
+  if (cache)
+    return cache->get(access, rel);
+  return access.getAccessRelation(rel);
+}
+
 // Builds a flat affine constraint system to check if there exists a dependence
 // between memref accesses 'srcAccess' and 'dstAccess'.
 // Returns 'NoDependence' if the accesses can be definitively shown not to
@@ -617,7 +640,8 @@ void MemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
 DependenceResult mlir::affine::checkMemrefAccessDependence(
     const MemRefAccess &srcAccess, const MemRefAccess &dstAccess,
     unsigned loopDepth, FlatAffineValueConstraints *dependenceConstraints,
-    SmallVector<DependenceComponent, 2> *dependenceComponents, bool allowRAR) {
+    SmallVector<DependenceComponent, 2> *dependenceComponents, bool allowRAR,
+    AccessRelationCache *relationCache) {
   LLVM_DEBUG(llvm::dbgs() << "Checking for dependence at depth: "
                           << Twine(loopDepth) << " between:\n";);
   LLVM_DEBUG(srcAccess.opInst->dump());
@@ -641,12 +665,13 @@ DependenceResult mlir::affine::checkMemrefAccessDependence(
   if (!getCommonBlockInAffineScope(srcAccess.opInst, dstAccess.opInst))
     return DependenceResult::Failure;
 
-  // Create access relation from each MemRefAccess.
+  // Create access relation from each MemRefAccess. Both are consumed below --
+  // inverted, composed -- so a cached one has to be copied out.
   PresburgerSpace space = PresburgerSpace::getRelationSpace();
   IntegerRelation srcRel(space), dstRel(space);
-  if (failed(srcAccess.getAccessRelation(srcRel)))
+  if (failed(getAccessRelation(srcAccess, srcRel, relationCache)))
     return DependenceResult::Failure;
-  if (failed(dstAccess.getAccessRelation(dstRel)))
+  if (failed(getAccessRelation(dstAccess, dstRel, relationCache)))
     return DependenceResult::Failure;
 
   FlatAffineValueConstraints srcDomain(srcRel.getDomainSet());
@@ -713,8 +738,7 @@ void mlir::affine::getDependenceComponents(
   // callers.
   SmallVector<Operation *, 8> loadAndStoreOps;
   forOp->walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
-    if (op->hasTrait<OpTrait::AffineScope>() &&
-        op != forOp.getOperation())
+    if (op->hasTrait<OpTrait::AffineScope>() && op != forOp.getOperation())
       return WalkResult::skip();
     if (isa<AffineReadOpInterface, AffineWriteOpInterface>(op))
       loadAndStoreOps.push_back(op);

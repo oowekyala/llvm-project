@@ -169,12 +169,40 @@ struct DependenceResult {
   DependenceResult(ResultEnum v) : value(v) {}
 };
 
+/// Memoizes MemRefAccess::getAccessRelation, which is a pure function of the
+/// access while the IR stands but costs building the access map and the
+/// enclosing loops' domain constraints.
+///
+/// Dependence checking is all-pairs by nature, and each pair is tested at
+/// several depths, so an access's relation is otherwise rebuilt once per pair
+/// per depth rather than once. A caller running such a sweep should hand the
+/// same cache to every checkMemrefAccessDependence call in it. Valid only for as
+/// long as the accesses and their enclosing loops are unmodified.
+class AccessRelationCache {
+public:
+  /// Copies `access`'s relation into `rel`, which must be empty and in a
+  /// relation space. Fails exactly when MemRefAccess::getAccessRelation does.
+  LogicalResult get(const MemRefAccess &access,
+                    presburger::IntegerRelation &rel);
+
+  /// Drops everything cached. Entries are keyed on the accessing operation, so a
+  /// caller that erases any of them -- or that changes an access's indices or
+  /// enclosing loops -- has to call this before reusing the cache; a freed
+  /// Operation address can be handed out again to a different op.
+  void clear() { relations.clear(); }
+
+private:
+  /// Null for an access whose relation could not be built, so that a failure is
+  /// not recomputed either.
+  DenseMap<Operation *, std::optional<presburger::IntegerRelation>> relations;
+};
+
 DependenceResult checkMemrefAccessDependence(
     const MemRefAccess &srcAccess, const MemRefAccess &dstAccess,
     unsigned loopDepth,
     FlatAffineValueConstraints *dependenceConstraints = nullptr,
     SmallVector<DependenceComponent, 2> *dependenceComponents = nullptr,
-    bool allowRAR = false);
+    bool allowRAR = false, AccessRelationCache *relationCache = nullptr);
 
 /// Utility function that returns true if the provided DependenceResult
 /// corresponds to a dependence result.

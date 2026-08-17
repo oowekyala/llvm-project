@@ -374,9 +374,16 @@ LogicalResult convertValuesToAffineMapAndArgs(
 /// a memref. For example, if `EffectType` is MemoryEffects::Write, this method
 /// will check if there is no write to the memory between `start` and `memOp`
 /// that would change the read within `memOp`.
+///
+/// Proving this runs a dependence check between `memOp` and each access in
+/// between, so a caller asking it about many `memOp`s over the same region
+/// should pass an AccessRelationCache to be shared across those calls -- most of
+/// the reuse is between them rather than within one. Whatever the caller erases
+/// it has to clear from the cache first.
 template <typename EffectType, typename T>
 bool hasNoInterveningEffect(Operation *start, T memOp,
-                            llvm::function_ref<bool(Value, Value)> mayAlias);
+                            llvm::function_ref<bool(Value, Value)> mayAlias,
+                            AccessRelationCache *relationCache = nullptr);
 
 struct AffineValueExpr {
   explicit AffineValueExpr(AffineExpr e) : e(e) {}
