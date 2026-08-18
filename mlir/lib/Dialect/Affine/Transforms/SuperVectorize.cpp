@@ -580,6 +580,7 @@ using llvm::dbgs;
 /// Forward declaration.
 static FilterFunctionType
 isVectorizableLoopPtrFactory(const DenseSet<Operation *> &parallelLoops,
+                             const ReductionLoopMap &reductionLoops,
                              int fastestVaryingMemRefDimension);
 
 /// Creates a vectorization pattern from the command line arguments.
@@ -587,7 +588,8 @@ isVectorizableLoopPtrFactory(const DenseSet<Operation *> &parallelLoops,
 /// If the command line argument requests a pattern of higher order, returns an
 /// empty pattern list which will conservatively result in no vectorization.
 static std::optional<NestedPattern>
-makePattern(const DenseSet<Operation *> &parallelLoops, int vectorRank,
+makePattern(const DenseSet<Operation *> &parallelLoops,
+            const ReductionLoopMap &reductionLoops, int vectorRank,
             ArrayRef<int64_t> fastestVaryingPattern) {
   using affine::matcher::For;
   int64_t d0 = fastestVaryingPattern.empty() ? -1 : fastestVaryingPattern[0];
@@ -595,14 +597,17 @@ makePattern(const DenseSet<Operation *> &parallelLoops, int vectorRank,
   int64_t d2 = fastestVaryingPattern.size() < 3 ? -1 : fastestVaryingPattern[2];
   switch (vectorRank) {
   case 1:
-    return For(isVectorizableLoopPtrFactory(parallelLoops, d0));
+    return For(isVectorizableLoopPtrFactory(parallelLoops, reductionLoops, d0));
   case 2:
-    return For(isVectorizableLoopPtrFactory(parallelLoops, d0),
-               For(isVectorizableLoopPtrFactory(parallelLoops, d1)));
+    return For(
+        isVectorizableLoopPtrFactory(parallelLoops, reductionLoops, d0),
+        For(isVectorizableLoopPtrFactory(parallelLoops, reductionLoops, d1)));
   case 3:
-    return For(isVectorizableLoopPtrFactory(parallelLoops, d0),
-               For(isVectorizableLoopPtrFactory(parallelLoops, d1),
-                   For(isVectorizableLoopPtrFactory(parallelLoops, d2))));
+    return For(
+        isVectorizableLoopPtrFactory(parallelLoops, reductionLoops, d0),
+        For(isVectorizableLoopPtrFactory(parallelLoops, reductionLoops, d1),
+            For(isVectorizableLoopPtrFactory(parallelLoops, reductionLoops,
+                                             d2))));
   default: {
     return std::nullopt;
   }
@@ -917,8 +922,10 @@ static void computeMemoryOpIndices(Operation *op, AffineMap map,
 // varying along the `fastestVaryingMemRefDimension`.
 static FilterFunctionType
 isVectorizableLoopPtrFactory(const DenseSet<Operation *> &parallelLoops,
+                             const ReductionLoopMap &reductionLoops,
                              int fastestVaryingMemRefDimension) {
-  return [&parallelLoops, fastestVaryingMemRefDimension](Operation &forOp) {
+  return [&parallelLoops, &reductionLoops,
+          fastestVaryingMemRefDimension](Operation &forOp) {
     auto loop = cast<AffineForOp>(forOp);
     if (!parallelLoops.contains(loop))
       return false;
@@ -926,6 +933,17 @@ isVectorizableLoopPtrFactory(const DenseSet<Operation *> &parallelLoops,
     auto vectorizableBody =
         isVectorizableLoopBody(loop, &memRefDim, vectorTransferPattern());
     if (!vectorizableBody)
+      return false;
+    // Vectorizing a reduction widens the accumulator, so the loop's own
+    // successive accesses become the lanes of one vector. Unless they are
+    // adjacent in memory (`memRefDim == 0`) no load gathers them: the transfer
+    // lowers to a scalar load per lane plus the inserts that assemble them,
+    // which costs more than the scalar reduction it replaces. Declining such a
+    // loop lets the match fall through to an enclosing parallel loop, whose
+    // accesses along the same memref *are* adjacent -- the reduction then
+    // stays a loop, over a vector accumulator. A reduction all of whose
+    // accesses are invariant (-1) has no stride to be wrong about.
+    if (memRefDim > 0 && reductionLoops.contains(loop))
       return false;
     return memRefDim == -1 || fastestVaryingMemRefDimension == -1 ||
            memRefDim == fastestVaryingMemRefDimension;
@@ -1221,6 +1239,57 @@ static bool isIVMappedToMultipleIndices(
   return false;
 }
 
+/// Which vector dimensions of a transfer over `memRefType` at `indices` are
+/// guaranteed to stay inside the memref.
+///
+/// A transfer left possibly-out-of-bounds is lowered as a masked transfer, and
+/// -- when its lanes are not adjacent in memory -- as one scalar access per
+/// lane, so what is proved here decides whether a vectorized loop becomes
+/// vector loads or a per-lane loop. A dimension is in bounds when its index is
+/// the induction variable of a loop this pass just vectorized and that loop's
+/// last iteration still reads a whole vector's worth from within the
+/// dimension. Everything else stays false, which is always sound.
+static SmallVector<bool> computeTransferInBounds(MemRefType memRefType,
+                                                 ValueRange indices,
+                                                 AffineMap permutationMap,
+                                                 VectorizationState &state) {
+  SmallVector<bool> inBounds(permutationMap.getNumResults(), false);
+  for (auto [vectorDim, expr] : llvm::enumerate(permutationMap.getResults())) {
+    // A constant result broadcasts along this vector dimension and reads a
+    // single element, so no index of the memref advances with it.
+    auto dimExpr = dyn_cast<AffineDimExpr>(expr);
+    if (!dimExpr)
+      continue;
+    unsigned memRefDim = dimExpr.getPosition();
+    if (memRefType.isDynamicDim(memRefDim))
+      continue;
+
+    auto iv = dyn_cast<BlockArgument>(indices[memRefDim]);
+    if (!iv)
+      continue;
+    auto loop = dyn_cast<AffineForOp>(iv.getOwner()->getParentOp());
+    // Only the loops this pass rewrote step by a whole vector; any other loop
+    // reaching here says nothing about the width read from its induction
+    // variable.
+    if (!loop || loop.getInductionVar() != iv ||
+        state.vecLoopToVecDim.lookup(loop) != vectorDim)
+      continue;
+    if (!loop.hasConstantBounds() || loop.getConstantLowerBound() < 0)
+      continue;
+
+    int64_t lb = loop.getConstantLowerBound();
+    int64_t ub = loop.getConstantUpperBound();
+    int64_t step = loop.getStepAsInt();
+    if (ub <= lb || step <= 0)
+      continue;
+    int64_t width = state.strategy->vectorSizes[vectorDim];
+    int64_t lastIteration = lb + ((ub - lb - 1) / step) * step;
+    if (lastIteration + width <= memRefType.getDimSize(memRefDim))
+      inBounds[vectorDim] = true;
+  }
+  return inBounds;
+}
+
 /// Vectorizes an affine load with the vectorization strategy in 'state' by
 /// generating a 'vector.transfer_read' op with the proper permutation map
 /// inferred from the indices of the load. The new 'vector.transfer_read' is
@@ -1266,9 +1335,11 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp,
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ permutationMap: ");
   LLVM_DEBUG(permutationMap.print(dbgs()));
 
+  SmallVector<bool> inBounds =
+      computeTransferInBounds(memRefType, indices, permutationMap, state);
   auto transfer = vector::TransferReadOp::create(
       state.builder, loadOp.getLoc(), vectorType, loadOp.getMemRef(), indices,
-      /*padding=*/std::nullopt, permutationMap);
+      /*padding=*/std::nullopt, permutationMap, inBounds);
 
   // Register replacement for future uses in the scope.
   state.registerOpVectorReplacement(loadOp, transfer);
@@ -1322,9 +1393,11 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp,
     return nullptr;
   }
 
+  SmallVector<bool> inBounds =
+      computeTransferInBounds(memRefType, indices, permutationMap, state);
   auto transfer = vector::TransferWriteOp::create(
       state.builder, storeOp.getLoc(), vectorValue, storeOp.getMemRef(),
-      indices, permutationMap);
+      indices, permutationMap, inBounds);
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ vectorized store: " << transfer);
 
   // Register replacement for future uses in the scope.
@@ -1757,7 +1830,8 @@ static void vectorizeLoops(Operation *parentOp, DenseSet<Operation *> &loops,
 
   // Compute 1-D, 2-D or 3-D loop pattern to be matched on the target loops.
   std::optional<NestedPattern> pattern =
-      makePattern(loops, vectorSizes.size(), fastestVaryingPattern);
+      makePattern(loops, reductionLoops, vectorSizes.size(),
+                  fastestVaryingPattern);
   if (!pattern) {
     LLVM_DEBUG(dbgs() << "\n[early-vect] pattern couldn't be computed\n");
     return;
